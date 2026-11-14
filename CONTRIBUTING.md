@@ -35,4 +35,4 @@ env -u RELAY_HOME HOME="$TRY_HOME" "$TRY_HOME/.local/bin/relay" doctor
 
 ## Reporting a security problem
 
-Please don't open a public issue. Use GitHub's private vulnerability reporting on this repository instead: the "Report a vulnerability" button on the Security tab. If you can't find it, open an issue that asks for a private contact and leaves out the details.
+Please don't open a public issue. [`SECURITY.md`](SECURITY.md) says how to report one privately, what is in scope and what to expect.
