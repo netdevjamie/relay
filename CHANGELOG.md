@@ -11,4 +11,6 @@ First public release.
 - Prototype mode: `relay proto` and `relay promote`.
 - A JSON read API (`relay list --json`, `relay status --json`).
 - `relay doctor` checks an install end to end.
+- `setup.sh` warns when another `relay` on your PATH would run instead, and says which one runs.
+- A security policy (`SECURITY.md`): report vulnerabilities privately through GitHub.
 - A sample app, a sample brief and a recorded real run in `examples/`.
