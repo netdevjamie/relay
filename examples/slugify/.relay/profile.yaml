@@ -1,0 +1,10 @@
+# The project profile Relay reads. Field reference: docs/profile.md in the Relay repo.
+schema_version: 1
+platforms: [cli]
+
+commands:
+  # Relay runs this itself after each Builder step and each Tester pass, in
+  # the task's checkout at its commit, and records the result. A role saying
+  # "tests pass" is never enough. The tests use Python's own unittest, so
+  # nothing needs installing.
+  test: python3 -m unittest -q

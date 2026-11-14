@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+test-results/
+
+# Workflow runtime state (should never be in this repo)
+/handoffs/
+/briefs/
+.lock
+*.tmp
+run.yaml
+.relay.yaml
+
+# Output of tools/review_prompt.py
+reviews/
+
+# OS
+.DS_Store
+
+# Editors
+*.swp
+*.swo
+*~

@@ -1,0 +1,18 @@
+# Relay's own project profile. Field reference: docs/profile.md
+schema_version: 1
+platforms: [cli]
+
+# Commands run from the repo root.
+commands:
+  test: cd orchestrator && python3 -m pytest tests/ ../tools/tests -q --junitxml=../test-results/junit.xml
+
+# The JUnit file the test command writes; Relay reads the counts from it.
+test_report: test-results/junit.xml
+
+deploy_targets:
+  - name: local-install
+    platform: cli
+    command: ./setup.sh
+    smoke: relay list && relay doctor && relay list --json
+    rollback: Restore only what the install writes, from the backup taken before it, by the steps under "Backup and rollback" in DEPLOYMENT.md. Never restore relay.db or tasks/, which would put back an older ledger.
+    rollback_cannot_undo: What the list "What the rollback does not put back or undo" under "Backup and rollback" in DEPLOYMENT.md names, among them a file the install added, packages added to the install's .venv, and a change made since the backup to any file in ~/.claude/agents. A change to the ledger schema needs its own rollback plan.

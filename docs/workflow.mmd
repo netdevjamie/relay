@@ -1,0 +1,20 @@
+%% The chain a task runs through. README.md shows the same diagram.
+flowchart TD
+    brief([Your brief]) -->|feature or project| D[Designer]
+    brief -->|fix| B[Builder]
+    D -->|you approve the brief| A[Architect]
+    D -->|you approve the brief| B
+    A -->|you approve the plan| B
+    B --> T{{Relay runs the tests}}
+    T -->|fail| B
+    T -->|pass| R[Reviewer]
+    R -->|changes requested| B
+    R -->|approved, risky| Te[Tester]
+    R -->|approved, not risky| done([Done])
+    Te -->|fail, or Relay's tests fail| B
+    Te -->|pass, and Relay's tests pass| S[Security]
+    S -->|critical findings| B
+    S --> done
+    R -.->|deploy: yes, not risky| O[Ops]
+    S -.->|deploy: yes| O
+    O -->|you run the deploy| done

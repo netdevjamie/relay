@@ -1,0 +1,6 @@
+# Optional per-repo Relay settings. Relay never writes this file: put it in
+# the repo root as .relay.yaml and commit it if you want what it offers.
+
+# A file in the repo root with more deploy context. The Ops role is given
+# its text along with its own instructions.
+# ops_addendum: deploy.md

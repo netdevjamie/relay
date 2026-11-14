@@ -1,0 +1,69 @@
+# Project profile: what Relay needs to know about this repo.
+# Save as .relay/profile.yaml in the repo and commit it.
+# Check it with:  relay profile <repo-alias>
+# Field reference: docs/profile.md in the Relay repo.
+#
+# Unknown keys are errors, so delete what you don't need rather than leaving
+# it half filled in. Never put a secret's value in this file.
+
+schema_version: 1
+
+# What this repo ships: web, api, ios, android, cli, ...
+# A deploy target's or store's platform must be one of these.
+platforms: [web, ios]
+
+# Commands run from the repo root. Only `test` is required.
+commands:
+  test: npm test
+  # build: npm run build
+  # lint: npm run lint
+  # audit: npm audit            # dependency check, used by Security
+  # start: npm run dev          # how to run the app locally
+
+# The JUnit XML file the test command writes, if it writes one. Relay reads
+# the test counts from it after each run. Add the file to .gitignore.
+# test_report: test-results/junit.xml
+
+# How many times the Tester reruns the suite to catch flaky tests (default 2).
+# flaky_check_runs: 2
+
+# CLIs a deploy needs. `check` must exit 0 only when the CLI is installed
+# and logged in.
+# required_clis:
+#   - name: vercel
+#     check: vercel whoami
+
+# One entry per place this repo deploys to. Without a smoke test and a
+# rollback, Ops reports not-ready.
+# deploy_targets:
+#   - name: production
+#     platform: web
+#     command: vercel deploy --prod
+#     requires_cli: [vercel]
+#     smoke: curl -fsS https://example.com/health
+#     rollback: vercel rollback
+#     rollback_cannot_undo: Database migrations.
+
+# App store details, for mobile repos.
+# stores:
+#   - platform: ios
+#     app_id: com.example.app
+#     track: TestFlight
+#     release_script: scripts/release-ios.sh
+
+# Secrets by name and where they live. Never the value.
+# Locations start with keychain:, keepass: or env:
+# secrets:
+#   - name: DEPLOY_TOKEN
+#     location: keychain:example-deploy-token
+
+# The only environments Security may attack. Leave it out and Security
+# makes no live attacks at all.
+# security_test_targets:
+#   - name: local
+#     url: http://localhost:3000
+
+# Where new behaviour should show up after a deploy.
+# observability:
+#   logs: vercel logs
+#   errors: Sentry project example-web

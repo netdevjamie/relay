@@ -1,0 +1,39 @@
+# Relay configuration. setup.sh copies this to $RELAY_HOME/orchestrator/config.yaml
+# once; edit that copy.
+
+# Where Relay keeps state. sqlite is the ledger: every step, verdict, test run
+# and owner decision, append-only. "files" is the older run.yaml mode, kept only
+# for installs that predate the ledger.
+persistence_backend: sqlite
+
+# How many times in a row Relay may route a task back to one phase on its own
+# (a Reviewer's changes requested, a failed test run) before it stops and asks.
+# A round you choose, with `relay send-back` or `relay override`, is not
+# counted and starts that phase's count again.
+max_retries: 3
+
+# How long Relay lets a repo's test command run before stopping it and
+# counting the run as failed (seconds).
+test_timeout_seconds: 1800
+
+# How long Relay keeps the Mac awake after it starts a phase (seconds). The
+# hold ends sooner, when the next relay command for the task runs. 0 turns
+# it off. A closed lid still sleeps the machine whatever this says.
+keep_awake_seconds: 7200
+
+# If true, orchestrator invokes `claude --agent <name> --print` automatically.
+# If false (default), it prints the command for you to run manually.
+auto_invoke: false
+
+# Model override for agent invocation (null = use default).
+# Only applies when auto_invoke is true.
+model: null
+
+# The two gates you can turn off. Set one to false and Relay moves on
+# without stopping there. Every other gate (a pass with warnings or concerns,
+# Security's findings, a deploy, a role that asks for you) always stops.
+human_gates:
+  # Approve the Designer's brief before the next role starts
+  after_designer: true
+  # Approve the Architect's plan before building
+  after_architect: true

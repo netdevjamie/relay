@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Relay: runs a task through a chain of role agents, with gates for the owner.
+# Usage: relay start my-task --repo example-api
+#        relay next my-task
+#        relay list
+
+RELAY_HOME="${RELAY_HOME:-$HOME/Projects/.relay}"
+export RELAY_HOME
+VENV="${RELAY_HOME}/orchestrator/.venv/bin/python3"
+
+if [ -x "$VENV" ]; then
+    exec "$VENV" "${RELAY_HOME}/orchestrator/relay.py" "$@"
+else
+    exec python3 "${RELAY_HOME}/orchestrator/relay.py" "$@"
+fi
