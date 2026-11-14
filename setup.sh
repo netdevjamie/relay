@@ -113,6 +113,27 @@ point_wrapper_at_install() {
     mv "${wrapper}.new" "${wrapper}"
 }
 
+# Warn when typing `relay` would run some other command than the link this
+# script made, and say which one runs. Only a warning: the install is fine.
+warn_about_other_relay_on_path() {
+    local link="$1" bin_dir found
+    bin_dir="$(dirname "${link}")"
+    hash -r
+    found="$(command -v relay 2>/dev/null || true)"
+    if [ -z "${found}" ] || [ "${found}" -ef "${link}" ]; then
+        return 0
+    fi
+    echo "" >&2
+    echo "Warning: another relay is on your PATH: ${found}" >&2
+    case ":${PATH}:" in
+        *":${bin_dir}:"*)
+            echo "  It comes before ${bin_dir}, so typing \`relay\` runs it, not Relay." >&2 ;;
+        *)
+            echo "  ${bin_dir} is not on your PATH, so typing \`relay\` runs it, not Relay." >&2 ;;
+    esac
+    echo "  Put ${bin_dir} first on your PATH, or run ${link} by its full path." >&2
+}
+
 # Back up a file of the user's own before a role prompt replaces it. This
 # runs before the copy into $RELAY_HOME/agents, so that copy is still the
 # last install's.
@@ -172,6 +193,7 @@ fi
 
 mkdir -p "${BIN_DIR}"
 ln -sf "${RELAY_HOME}/relay" "${BIN_DIR}/relay"
+warn_about_other_relay_on_path "${BIN_DIR}/relay"
 
 echo ""
 echo "Relay is installed. The \`relay\` command is in ${BIN_DIR}."
