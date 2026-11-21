@@ -1,4 +1,4 @@
-"""The contract between a role's report and the card: the summary line,
+"""The contract between a role's report and the board: the summary line,
 the rated findings table and the capped-verdict line, read as written.
 """
 
@@ -25,7 +25,7 @@ def rated(rows: str) -> dict:
 
 class TestNewFormatReports:
     def test_new_format_reports_read_without_help(self):
-        """A Reviewer, Tester and Security report in the rated format,
+        """C29: a Reviewer, Tester and Security report in the new format,
         every finding with its severity, statement and place."""
         reviewer = fixture("reviewer-rated.md")
         assert reviewer["rated"] is True
@@ -197,9 +197,9 @@ QUOTED_IN_THE_SUMMARY = {
 
 
 def own_top_lines(quoted: str) -> tuple:
-    """What the card is given for the summary line and the capped line of
+    """What the board is given for the summary line and the capped line of
     REAL_TOP: the role's own, unless the quote holds the same words. Then
-    the card cannot be sure which is the role's, and is given neither."""
+    the board cannot be sure which is the role's, and is given neither."""
     return ("One high gap, live now." if report_reader.SUMMARY_PREFIX not in quoted else None,
             False if report_reader.CAPPED_PREFIX not in quoted else None)
 
@@ -212,7 +212,7 @@ def rated_headings_laid_out(report: dict) -> int:
 class TestQuotedTextCannotSpeakForTheReport:
     @pytest.mark.parametrize("quoted", QUOTED_IN_THE_SUMMARY.values(), ids=QUOTED_IN_THE_SUMMARY.keys())
     def test_quoted_before_the_real_table(self, quoted):
-        """Whatever the Summary section quotes, the card is given the
+        """Whatever the Summary section quotes, the board is given the
         role's own rated findings, and never the quoted top lines."""
         report = read_report(f"{REAL_TOP}## Summary\n{quoted}\n{REAL_TABLE}\n## Findings\n")
         assert (report["summary_line"], report["capped_declared"]) == own_top_lines(quoted)
@@ -268,7 +268,7 @@ class TestQuotedTextCannotSpeakForTheReport:
         "Capped verdict: yes\nCapped verdict: no\n",
     ], ids=["a made-up title above the real one", "a made-up title below it", "two lines under one title"])
     def test_two_answers_are_no_answer(self, text):
-        """Two titles, or two summary lines, that disagree: the card cannot
+        """Two titles, or two summary lines, that disagree: the board cannot
         tell which is the role's own, so it is given neither."""
         report = read_report(text + "\n" + REAL_TABLE)
         assert (report["summary_line"], report["capped_declared"]) == (None, None)
@@ -288,7 +288,7 @@ class TestQuotedTextCannotSpeakForTheReport:
 
 
 # ---------------------------------------------------------------------------
-# What the card may claim: a loose look over the whole file
+# What the board may claim: a loose look over the whole file
 # ---------------------------------------------------------------------------
 
 CLEAN_NONE = "# Title\n\n## Summary\nFine.\n\n## Rated findings\n\nNone.\n"
@@ -301,7 +301,7 @@ class TestWhatTheBoardMayClaim:
         "None.\n\n---", "None.\n\n***", "___\n\nNone.\n\n- - -\n\nRecord: none\n\n>",
     ])
     def test_none_in_other_dress_is_not_no_findings_to_the_board(self, section):
-        """The card says "no findings" only on the one line the prompts
+        """The board says "no findings" only on the one line the prompts
         ask for."""
         assert read_report(CLEAN_NONE.replace("None.\n", section + "\n"))["says_none"] is False
         assert read_report(CLEAN_NONE)["says_none"] is True

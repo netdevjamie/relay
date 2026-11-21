@@ -9,35 +9,54 @@ sqlite-backed code paths in Relay's other modules.
 Design:
 
   tasks  -- one row per task, the current-state snapshot. Never hand-edited;
-            always written by record_step()/save_task_state() inside a
-            transaction, mirroring what save_run_state() does for run.yaml
-            on the files backend.
+            written by create_task() and update_task() inside a
+            transaction.
   steps  -- one row per numbered agent artifact (phase, step, verdict,
-            filename, content hash). Routing reads the latest artifact's
-            verdict, not run.yaml; the steps table holds the same facts.
+            filename, content hash). Routing reads the latest step from
+            here, not from run.yaml or a report's frontmatter
+            (run_state.find_latest_artifact).
   events -- insert-only audit log. Anything steps/tasks can't capture on
             its own (retries, human overrides/approvals, worktree lifecycle,
-            raw state saves) gets an event row here. This is deliberately
+            status and phase changes) gets an event row here. This is deliberately
             not full event sourcing: tasks/steps are still the fast-path
             read model; events exist so "what happened to this task and
             when" is a query, not a forensic file read.
 
-This module imports none of Relay's other modules when it loads but
-bounded_yaml, which is standalone (no circular import; one function imports
-agents.artifact_name late). The caller
-(settings.py) calls configure() before opening the ledger, with its VALID_PHASES /
+Each thing that happens is recorded by its own call at the moment it
+happens: record_dispatch() when a step starts (with the report file the
+agent was told to write), record_verdict() when its verdict is read,
+record_retry() when an automatic round is counted, update_task() when the
+task's own fields change. Nothing is worked out afterwards by comparing a
+state dict with the ledger. transaction() lets a command make several of
+these calls and commit them together.
+
+The ledger records its own schema version in SQLite's user_version and
+upgrades itself, after a backup, the first time it is opened for writing
+by a newer Relay (see "Ledger version" below).
+
+The one-time move from task files lives in migrate_legacy.py, which uses
+this module; this module knows nothing of it.
+
+This module imports only bounded_yaml from Relay, which is standalone. The
+caller (settings.py) calls configure() before opening the ledger, with its VALID_PHASES /
 VALID_VERDICTS / VALID_STATUSES so there is exactly one place those enums
 are defined -- this module enforces them, it does not redefine them.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
+import os
+import secrets
+import shutil
 import sqlite3
-from datetime import date, datetime, timezone
+import stat
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 try:
     import yaml as _yaml
@@ -47,6 +66,8 @@ except ImportError:  # pragma: no cover - settings.py already fails fast on this
 import bounded_yaml
 
 
+# The per-task schema_version column and run.yaml key. It is not the
+# ledger's own version (LEDGER_VERSION, below), and it stays 1.
 SCHEMA_VERSION = 1
 
 _SCHEMA = """
@@ -77,8 +98,6 @@ CREATE TABLE IF NOT EXISTS steps (
     created_at          TEXT,  -- nullable: a migrated step's real timestamp may
                                 -- genuinely be unrecoverable from the legacy
                                 -- corpus; NULL means "unknown", never fabricated.
-                                -- record_step_and_save() (the live save path,
-                                -- not migration) always supplies a real value.
     PRIMARY KEY (task_id, step)
 );
 
@@ -98,32 +117,76 @@ CREATE INDEX IF NOT EXISTS idx_events_type ON events(task_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_steps_task  ON steps(task_id, step);
 """
 
-# Event types actually used. Not an enforced enum (events is intentionally a
-# loose audit log), just documentation of the vocabulary in use.
+# Event types. Not an enforced enum (events is intentionally a loose audit
+# log), just documentation of the vocabulary. Every constant stays here, so
+# readers and tests name them all as db.EVENT_*.
+
+# -- Live: written by Relay.
 EVENT_TASK_CREATED = "task_created"
+# A save changed the task's status or current phase (update_task). A save
+# that changes neither writes none; older ledgers hold one for every save.
 EVENT_STATE_SAVED = "state_saved"
 EVENT_RETRY = "retry"
 EVENT_APPROVAL = "approval"
 EVENT_WORKTREE_CREATED = "worktree_created"
 EVENT_WORKTREE_FINALIZED = "worktree_finalized"
-EVENT_MIGRATION_OVERRIDE = "migration_override"
-EVENT_HISTORICAL_NOTE = "historical_note"
-EVENT_STEP_NEVER_DELIVERED = "step_never_delivered"
+# `relay next` read a step's verdict from its report (sync_step_verdict_from_file).
+EVENT_VERDICT_RECORDED = "verdict_recorded"
 EVENT_DEPLOY_DECIDED = "deploy_decided"
 EVENT_SENT_BACK = "sent_back"
 EVENT_TEST_RUN = "test_run"
 EVENT_TEST_COMMAND_ACCEPTED = "test_command_accepted"
 EVENT_SLEPT_DURING_STEP = "slept_during_step"
 EVENT_OWNER_NOTE = "owner_note"
-# What `relay start` read of the task's size, risk and deploy (sizing.py).
+# A role started under --auto ran past its time limit and was stopped (agents.py).
+EVENT_TIME_LIMIT_STOP = "time_limit_stop"
+# What `relay start` read of the task's size, risk and deploy (sizing.py),
+# and again for every later change: a raise from a Reviewer's or Arbiter's
+# report, or the owner's `relay resize` (record_sizing_change). Every reader
+# takes the latest, so a Relay from before changes existed reads it too.
 EVENT_SIZED = "sized"
-# Relay's checks on a role's report. Ledgers written by older versions still
-# hold this event; nothing writes or reads it.
+# The sizing hint worked out after a Builder step (risk_hint.py). Read by
+# risk_record: the next judging role's prompt, status, the card and the JSON API.
+EVENT_RISK_HINT = "risk_hint"
+# What a Reviewer's or Arbiter's report said of the sizing, where it
+# answered, asked for something Relay refused, or did not answer a hint it
+# had to. Read by risk_record.
+EVENT_SIZING_JUDGED = "sizing_judged"
+# The commit Relay confirmed for a task's base (base_trust.py): at `relay
+# start`, at the first check of a task recorded before base commits existed,
+# and at each forward move. The newest row is the task's base commit. Read
+# only by base_trust; every other reader of events passes over it.
+EVENT_BASE_CONFIRMED = "base_confirmed"
+# The Arbiter was dispatched (commands._dispatch_next). Read by
+# arbiter_record, for what a later Arbiter is handed.
+EVENT_ARBITER_STARTED = "arbiter_started"
+# Relay acted on an Arbiter's ruling (commands._record_the_arbiter_outcome).
+# Read by arbiter_record.read_rulings and read_follow_ups: status, the card,
+# the JSON read API and later prompts.
+EVENT_ARBITER_RULED = "arbiter_ruled"
+# Relay could not act on an Arbiter's report. Read by arbiter_record and by
+# read_api.read_gate, which shows the arbiter_unreadable gate from it.
+EVENT_ARBITER_UNREADABLE = "arbiter_unreadable"
+# The owner accepted a step and logged its remaining findings as follow-ups
+# (`relay decide ... accept-and-log`). Read by arbiter_record.read_follow_ups.
+EVENT_FOLLOW_UPS_LOGGED = "follow_ups_logged"
+
+# -- Written only by migrate_legacy.py, when it imports a task from files.
+EVENT_MIGRATION_OVERRIDE = "migration_override"
+EVENT_HISTORICAL_NOTE = "historical_note"
+EVENT_STEP_NEVER_DELIVERED = "step_never_delivered"
+MIGRATION_EVENT_TYPES = frozenset({
+    EVENT_MIGRATION_OVERRIDE, EVENT_HISTORICAL_NOTE, EVENT_STEP_NEVER_DELIVERED,
+})
+
+# -- Legacy, read-only: nothing writes these; older ledgers hold them and
+# every reader passes over them.
+# Written by a check Relay once made on each role's report.
 EVENT_REPORT_CHECK = "report_check"
-# The process audit. Ledgers written by older versions still hold these two
-# events; nothing writes them and every reader passes over them.
+# Written by a process audit Relay once ran.
 EVENT_AUDIT_STARTED = "audit_started"
 EVENT_AUDIT_REPORTED = "audit_reported"
+LEGACY_EVENT_TYPES = frozenset({EVENT_REPORT_CHECK, EVENT_AUDIT_STARTED, EVENT_AUDIT_REPORTED})
 
 
 class InvalidTransition(ValueError):
@@ -138,11 +201,13 @@ class InvalidTransition(ValueError):
 class DatabaseUnavailable(RuntimeError):
     """Base class: the canonical sqlite database cannot be used as-is.
 
-    Raised only by connect_existing() -- the fail-closed entry point real
-    Relay commands use once persistence_backend is sqlite. connect()
-    (used for deliberate creation, and throughout the test suite for
-    low-level plumbing) never raises this; it happily creates a fresh
-    database, exactly as it always has. The distinction is the point:
+    Raised by connect_existing() -- the fail-closed entry point real
+    Relay commands use once persistence_backend is sqlite -- for a missing,
+    corrupt or unknown-version ledger, or one whose upgrade failed.
+    connect() (used for deliberate creation, and throughout the test suite
+    for low-level plumbing) happily creates a fresh database, exactly as it
+    always has, and raises this only for an existing ledger whose version
+    it cannot take or whose upgrade failed. The distinction is the point:
     ordinary command execution must never silently fabricate or repair
     canonical state, only an explicit, operator-invoked action may.
     """
@@ -157,108 +222,34 @@ class DatabaseCorrupt(DatabaseUnavailable):
     valid sqlite database at all."""
 
 
-class MigrationExcluded(ValueError):
-    """Raised when import_task() is called for a task an explicit
-    MigrationDecision marks exclude=True. A distinct exception from
-    InvalidTransition -- exclusion is a deliberate human decision, not a
-    data-integrity failure."""
+# Python: a class with two bases is caught by an `except` for either.
+class UnreadableEvent(DatabaseCorrupt, ValueError):
+    """An event's payload cannot be read as JSON: only a hand-edited ledger
+    holds one. A command stops on it with a plain message, as on any corrupt
+    ledger; it is a ValueError too, as json.loads' own error was, so a
+    reader that already treats such a row as unreadable (read_api's blocked
+    task, for one) still does."""
 
 
-# Python: @dataclass writes __init__, __eq__ and __repr__ for you from the field
-#   list below. frozen=True makes instances read-only after creation, so a
-#   decision can't be quietly changed after it's validated.
-@dataclasses.dataclass(frozen=True)
-class StepVerdictOverride:
-    """An explicit, human-authorized correction for ONE step's verdict.
-
-    Deliberately narrow: names the exact step, the exact historical value
-    expected to be found there, and the exact canonical value it becomes.
-    It is not "set this step's verdict to X" -- it is "if this step's
-    verdict is still exactly Y, treat it as X" -- so a decision authored
-    against one artifact can never silently apply to a different one that
-    happens to share a step number, and a decision that no longer matches
-    what's on disk fails loudly instead of applying blind.
-    """
-    step: int
-    expected_verdict: str
-    canonical_verdict: str
-    note: str = ""
-
-    # Python: __post_init__ runs right after the generated __init__. It's the place
-    #   for validation that needs several fields at once (raise to reject).
-    def __post_init__(self):
-        if not self.note:
-            raise ValueError(f"StepVerdictOverride for step {self.step} must include an audit note")
+class LedgerTooNew(DatabaseUnavailable):
+    """The ledger was upgraded by a newer Relay than this one. It is never
+    opened, written or backed up by this Relay."""
 
 
-@dataclasses.dataclass(frozen=True)
-class MigrationDecision:
-    """An explicit, human-authorized mapping for one task's migration.
+class LedgerNeedsUpgrade(DatabaseUnavailable):
+    """A read-only open found a ledger that must be upgraded before this
+    Relay can read it correctly. Read-only opens never upgrade."""
 
-    This is the *entire* migration-override mechanism -- narrowly typed on
-    purpose, not a generic dict of arbitrary field overrides. At the task
-    level it can only ever map a legacy value to a canonical status, a
-    canonical current_phase, or "exclude this task from migration
-    entirely." At the step level (`step_overrides`) it can only correct
-    one named step's verdict, and only when the historical value found
-    there still matches exactly what the decision expects. Nothing else
-    is expressible. It is never constructed, read, or reachable from
-    record_step_and_save(), create_task() without an explicit
-    current_phase argument, or any cmd_* function in commands.py -- ordinary
-    Relay operation has no code path that could produce or accept one, so
-    it cannot be activated by accident.
 
-    Every decision (and every step override within it) requires a `note`
-    -- there is no silent, unexplained override. import_task() validates
-    status/current_phase/verdicts against the same canonical enums as
-    everything else before writing them; a MigrationDecision can point at
-    a wrong-but-plausible-looking value and it will still be rejected at
-    write time, exactly like a raw legacy value would be. The decision
-    doesn't bypass validation -- it's the only way to supply a
-    *replacement* value for validation to check.
-    """
-    task_id: str
-    status: str | None = None
-    current_phase: str | None = None
-    exclude: bool = False
-    note: str = ""
-    step_overrides: tuple["StepVerdictOverride", ...] = ()
-    # Step numbers a human has confirmed were never delivered (a gap in the
-    # artifact trail). Recorded as events; never filled in or fabricated.
-    missing_steps: tuple[int, ...] = ()
-    # Files in the agent-artifact numbering range that are not agent phase
-    # output (prose plans, no-frontmatter docs, a second file reusing a step
-    # number). Imported as historical notes, never as pipeline steps.
-    note_files: tuple[str, ...] = ()
+class LedgerUpgradeFailed(DatabaseUnavailable):
+    """Backing up or upgrading the ledger failed. Nothing was changed."""
 
-    def __post_init__(self):
-        if not self.note:
-            raise ValueError(f"MigrationDecision for '{self.task_id}' must include an audit note")
-        if self.exclude and (self.status is not None or self.current_phase is not None
-                              or self.step_overrides or self.missing_steps or self.note_files):
-            raise ValueError(
-                f"MigrationDecision for '{self.task_id}' cannot both exclude the task "
-                f"and override its fields -- exclusion means nothing else is imported"
-            )
-        for field_name, values in (("missing_steps", self.missing_steps),
-                                   ("note_files", self.note_files)):
-            if len(values) != len(set(values)):
-                raise ValueError(
-                    f"MigrationDecision for '{self.task_id}' lists the same {field_name} entry "
-                    f"more than once"
-                )
-        steps_seen = [so.step for so in self.step_overrides]
-        if len(steps_seen) != len(set(steps_seen)):
-            raise ValueError(
-                f"MigrationDecision for '{self.task_id}' has more than one step_override "
-                f"for the same step -- each step gets exactly one explicit decision"
-            )
 
-    def step_override_for(self, step: int) -> "StepVerdictOverride | None":
-        for so in self.step_overrides:
-            if so.step == step:
-                return so
-        return None
+class LedgerCannotBeOpened(DatabaseUnavailable):
+    """The ledger passed its health check, but SQLite refused to open it for
+    use, most often because the folder it is in cannot be written: a WAL
+    ledger needs its -wal and -shm files beside it, and SQLite must create
+    them when they are missing. Nothing was changed."""
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +286,242 @@ def _now() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Ledger version
+# ---------------------------------------------------------------------------
+# The ledger file records its own version in SQLite's PRAGMA user_version.
+# A ledger behind this Relay is upgraded the first time it is opened for
+# writing: under the write lock, Relay backs the file up beside itself
+# (relay.db.backup-v{from}-{UTC time}), then applies each pending Upgrade in
+# order inside one transaction and stamps the new version. A ledger from a
+# newer Relay is refused. Version 1 is the schema every ledger has had since
+# the first one, so stamping it changes no data. A future schema change
+# appends an Upgrade here.
+
+class Upgrade(NamedTuple):
+    """One step that brings a ledger up to `to_version`. `apply` runs
+    inside the upgrade's transaction and must use execute(), never
+    executescript() (which commits). `readable_before` is True when a ledger
+    that has not had this step yet still reads correctly, so a read-only
+    open may read it as it is."""
+    to_version: int
+    apply: Callable[[sqlite3.Connection], None]
+    readable_before: bool
+
+
+def _baseline(conn: sqlite3.Connection) -> None:
+    """Version 1: the schema every ledger already has. Nothing to change."""
+
+
+_UPGRADES: list[Upgrade] = [Upgrade(1, _baseline, readable_before=True)]
+LEDGER_VERSION = _UPGRADES[-1].to_version
+
+
+def latest_ledger_version() -> int:
+    """The version this Relay brings a ledger up to. Read from _UPGRADES at
+    call time, so a test can add a step."""
+    return _UPGRADES[-1].to_version
+
+
+def ledger_version(conn: sqlite3.Connection) -> int:
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _pending_upgrades(found: int, latest: int) -> list[Upgrade]:
+    return [upgrade for upgrade in _UPGRADES if found < upgrade.to_version <= latest]
+
+
+def _too_new(db_path: Path, found: int, latest: int) -> LedgerTooNew:
+    return LedgerTooNew(
+        f"The ledger at {db_path} is version {found}, but this Relay knows ledger versions "
+        f"up to {latest}: it was upgraded by a newer Relay. Upgrade Relay to use it. "
+        "The file was not changed."
+    )
+
+
+def _no_such_version(db_path: Path, found: int) -> DatabaseCorrupt:
+    return DatabaseCorrupt(
+        f"The ledger at {db_path} says it is version {found}, which no Relay writes. "
+        "Relay will not operate against it, and has not modified it."
+    )
+
+
+def _refuse_unknown_version(conn: sqlite3.Connection, db_path: Path) -> None:
+    """Close the connection and refuse, before anything is written, a
+    ledger from a newer Relay (LedgerTooNew) or one whose version no Relay
+    writes, below 0 (DatabaseCorrupt)."""
+    found, latest = ledger_version(conn), latest_ledger_version()
+    if found > latest:
+        conn.close()
+        raise _too_new(db_path, found, latest)
+    if found < 0:
+        conn.close()
+        raise _no_such_version(db_path, found)
+
+
+def _upgrade_if_behind(conn: sqlite3.Connection, db_path: Path) -> None:
+    """Bring a behind ledger up to this Relay's version: take the write
+    lock, read the version again (another process may have upgraded it
+    while this one waited), back the file up, apply each pending step in
+    order and stamp the version, all in one transaction. A current ledger
+    is left alone, with no write. On any failure the transaction is rolled
+    back, the connection is closed and nothing in the ledger has changed."""
+    latest = latest_ledger_version()
+    if ledger_version(conn) == latest:
+        return
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        found = ledger_version(conn)
+        if found > latest:
+            raise _too_new(db_path, found, latest)
+        if found < 0:
+            raise _no_such_version(db_path, found)
+        if found == latest:
+            conn.rollback()
+            return
+        backup = _write_backup(db_path, found)
+        try:
+            for upgrade in _pending_upgrades(found, latest):
+                upgrade.apply(conn)
+            conn.execute(f"PRAGMA user_version = {int(latest)}")
+            conn.commit()
+        except Exception as error:
+            raise LedgerUpgradeFailed(
+                f"Upgrading the ledger at {db_path} from version {found} to {latest} failed "
+                f"({error}). Nothing was changed: it is still version {found}. The backup "
+                f"taken first is at {backup}."
+            ) from error
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+        raise
+
+
+def _write_backup(db_path: Path, found: int) -> Path:
+    """Copy the ledger to a new file beside it, named for the version it is
+    and the time, and check the copy. Called with the write lock held, so
+    nothing can change the ledger meanwhile.
+
+    The copy is written to a hidden unfinished file and only gets its
+    backup name once it has passed its check, so a backup name never holds
+    a partial copy, even if Relay is killed mid-copy. The unfinished file is
+    written, read back and checked only through the descriptor that created
+    it, never reopened by name, so nothing swapped in at the name can
+    redirect the copy. Never overwrites or follows anything already at a
+    backup name: a name already taken gets -2, -3 and so on. Raises
+    LedgerUpgradeFailed, with the unfinished file removed, when no good
+    backup could be made."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    name = f"{db_path.name}.backup-v{found}-{stamp}"
+    try:
+        unfinished, descriptor = _new_unfinished_backup(db_path)
+    except OSError as error:
+        raise _backup_failed(db_path, error) from error
+    try:
+        _copy_ledger_into(db_path, descriptor)
+        _check_backup(descriptor, found)
+        return _name_backup(db_path, unfinished, descriptor, name)
+    except Exception as error:
+        raise _backup_failed(db_path, error) from error
+    finally:
+        os.close(descriptor)
+        unfinished.unlink(missing_ok=True)
+
+
+def _backup_failed(db_path: Path, error: Exception) -> LedgerUpgradeFailed:
+    return LedgerUpgradeFailed(
+        f"Relay could not back up the ledger at {db_path} before upgrading it ({error}), "
+        "so it did not upgrade it. Nothing was changed."
+    )
+
+
+def _new_unfinished_backup(db_path: Path) -> tuple[Path, int]:
+    """Create, empty, the file the copy is written to before it is checked:
+    hidden, named so it is never taken for a backup, open for reading and
+    writing, with the ledger's permissions (the umask can only narrow
+    them). O_EXCL means nothing already at the name, a planted symlink
+    included, is ever opened."""
+    mode = stat.S_IMODE(os.stat(db_path).st_mode)
+    for _ in range(100):
+        unfinished = db_path.with_name(f".{db_path.name}.unfinished-backup-{secrets.token_hex(8)}")
+        try:
+            return unfinished, os.open(unfinished, os.O_CREAT | os.O_EXCL | os.O_RDWR, mode)
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free name for an unfinished backup beside {db_path}")
+
+
+def _copy_ledger_into(db_path: Path, descriptor: int) -> None:
+    """With no unmerged WAL frames the main file is the whole ledger and is
+    copied byte for byte; otherwise SQLite's backup API copies it, from a
+    second connection (from the caller's it would wait on its own lock),
+    into memory, and those bytes are written."""
+    wal = db_path.with_name(db_path.name + "-wal")
+    with os.fdopen(descriptor, "wb", closefd=False) as copy:
+        if wal.exists() and wal.stat().st_size > 0:
+            copy.write(_ledger_bytes_through_backup_api(db_path))
+        else:
+            with open(db_path, "rb") as source:
+                shutil.copyfileobj(source, copy)
+        copy.flush()
+        os.fsync(copy.fileno())
+
+
+def _ledger_bytes_through_backup_api(db_path: Path) -> bytes:
+    source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
+    try:
+        memory = sqlite3.connect(":memory:")
+        try:
+            source.backup(memory)
+            return memory.serialize()
+        finally:
+            memory.close()
+    finally:
+        source.close()
+
+
+def _check_backup(descriptor: int, found: int) -> None:
+    """The copy, read back through its own descriptor, must be a sound
+    ledger at the version it was taken from. It is checked in memory, where
+    SQLite cannot open a file marked for WAL mode, so the probe's copy has
+    header bytes 18 and 19 (the journal mode) set to rollback first."""
+    with os.fdopen(descriptor, "rb", closefd=False) as copy:
+        copy.seek(0)
+        written = copy.read()
+    probe = sqlite3.connect(":memory:")
+    try:
+        probe.deserialize(written[:18] + b"\x01\x01" + written[20:])
+        integrity = probe.execute("PRAGMA integrity_check").fetchone()[0]
+        version = ledger_version(probe)
+    finally:
+        probe.close()
+    if integrity != "ok" or version != found:
+        raise ValueError(f"the copy failed its check (integrity {integrity}, version {version})")
+
+
+def _name_backup(db_path: Path, unfinished: Path, descriptor: int, name: str) -> Path:
+    """Give the checked copy its backup name, `name` or `name-2`, `name-3`...
+    when taken, as a hard link: a link never replaces an existing name, and
+    with follow_symlinks=False never follows one. The unfinished name could
+    have been swapped since the copy was written, so the new name must be
+    the very file the descriptor wrote, or it is removed again."""
+    written = os.fstat(descriptor)
+    for attempt in range(1, 1000):
+        target = db_path.with_name(name if attempt == 1 else f"{name}-{attempt}")
+        try:
+            os.link(unfinished, target, follow_symlinks=False)
+        except FileExistsError:
+            continue
+        linked = os.lstat(target)
+        if (linked.st_dev, linked.st_ino) != (written.st_dev, written.st_ino):
+            target.unlink()
+            raise ValueError("the copy's file was replaced before it got its backup name")
+        return target
+    raise FileExistsError(f"Relay found no free name for a backup ({name} and -2 to -999 "
+                          "are all taken)")
+
+
+# ---------------------------------------------------------------------------
 # Connection / schema
 # ---------------------------------------------------------------------------
 
@@ -303,14 +530,71 @@ def connect(db_path: Path) -> sqlite3.Connection:
     if nothing is there yet. Used for deliberate creation (init_database())
     and by the test suite's low-level plumbing. Relay's real production
     connection path uses connect_existing() instead -- see its docstring
-    for why the two must not be merged."""
+    for why the two must not be merged.
+
+    A fresh database is stamped with this Relay's ledger version and
+    needs no backup. An existing one is refused if it is newer than this
+    Relay, and upgraded (after a backup) if it is behind."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    fresh = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
+                         ).fetchone() is None
+    if not fresh:
+        _refuse_unknown_version(conn, db_path)
     conn.execute("PRAGMA journal_mode = WAL")
+    if fresh:
+        init_schema(conn)
+        conn.execute(f"PRAGMA user_version = {int(latest_ledger_version())}")
+        return conn
+    _upgrade_if_behind(conn, db_path)
     init_schema(conn)
     return conn
+
+
+# Pauses before each new try of a failed integrity probe, 0.75 seconds in
+# all. While another Relay process checkpoints its writes into the main
+# file, the probe can read a page mid-copy; on a ledger Relay's size a
+# checkpoint takes milliseconds, so a later try reads it whole. A file that
+# is really corrupt fails every try and is refused as before.
+_PROBE_RETRY_PAUSES = (0.05, 0.1, 0.2, 0.4)
+
+
+def _probe_once(db_path: Path) -> tuple[str | None, sqlite3.Error | None]:
+    """PRAGMA integrity_check on the main file alone, as it is on disk:
+    its result, or the sqlite3.Error that stopped it.
+
+    The connection is read-only and immutable. A plain read-write open of
+    a database with a stale/unmerged -wal or -journal file (left behind by
+    a crash) triggers SQLite's automatic recovery replay as a side effect
+    of opening it -- which writes to the main file. That is the opposite
+    of what a corruption check should do to a file that might need to be
+    preserved untouched for inspection or backup. immutable=1 tells SQLite
+    the file will not change and skips that recovery machinery entirely,
+    so a corrupt/unhealthy database is genuinely never mutated by this
+    check. The price is that it takes no lock and ignores the WAL, so it
+    can meet a page another process is writing."""
+    try:
+        probe = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=5)
+        try:
+            return probe.execute("PRAGMA integrity_check").fetchone()[0], None
+        finally:
+            probe.close()
+    except sqlite3.Error as error:
+        return None, error
+
+
+def _probe_integrity(db_path: Path) -> tuple[str | None, sqlite3.Error | None]:
+    """_probe_once until it passes or every pause in _PROBE_RETRY_PAUSES
+    has been waited out, and the last probe's outcome. Every try is the
+    same immutable probe, so retrying changes nothing on disk."""
+    for pause in _PROBE_RETRY_PAUSES:
+        integrity, error = _probe_once(db_path)
+        if integrity == "ok":
+            return integrity, error
+        time.sleep(pause)
+    return _probe_once(db_path)
 
 
 def connect_existing(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
@@ -330,7 +614,12 @@ def connect_existing(db_path: Path, *, read_only: bool = False) -> sqlite3.Conne
 
     read_only=True is for the read API (relay status|list|gate-check
     --json): the same missing/corrupt checks, then a connection SQLite
-    itself refuses to write through.
+    itself refuses to write through. It never upgrades or backs up: a
+    ledger it cannot read correctly as it is raises LedgerNeedsUpgrade.
+
+    Either way a ledger from a newer Relay raises LedgerTooNew, untouched.
+    A read-write open of a ledger that is behind backs it up and upgrades it
+    first (see "Ledger version").
     """
     if not db_path.exists():
         raise DatabaseMissing(
@@ -341,31 +630,17 @@ def connect_existing(db_path: Path, *, read_only: bool = False) -> sqlite3.Conne
             "database used to be here, restore it from backup before continuing."
         )
 
-    # Probe with a read-only, immutable connection FIRST, before ever
-    # opening a normal read-write one. A plain read-write open of a
-    # database with a stale/unmerged -wal or -journal file (left behind by
-    # a crash) triggers SQLite's automatic recovery replay as a side
-    # effect of opening it -- which writes to the main file. That is the
-    # opposite of what a corruption check should do to a file that might
-    # need to be preserved untouched for inspection or backup.
-    # immutable=1 tells SQLite the file will not change and skips that
-    # recovery machinery entirely, so a corrupt/unhealthy database is
-    # genuinely never mutated by this check.
-    probe_uri = f"file:{db_path}?mode=ro&immutable=1"
-    try:
-        probe = sqlite3.connect(probe_uri, uri=True, timeout=5)
-        try:
-            integrity = probe.execute("PRAGMA integrity_check").fetchone()[0]
-        finally:
-            probe.close()
-    except sqlite3.Error as e:
+    # Check the file FIRST, before ever opening a normal read-write
+    # connection; _probe_once says how the check leaves the file untouched.
+    integrity, error = _probe_integrity(db_path)
+    if error is not None:
         raise DatabaseCorrupt(
             f"Database at {db_path} could not be read as a valid sqlite database "
-            f"({e}). Relay will not operate against it, and has not modified it. "
+            f"({error}). Relay will not operate against it, and has not modified it. "
             "Restore from backup, or run 'relay recover --from-projections' to "
             "review what a rebuild from Markdown/YAML projections would look "
             "like before applying it."
-        ) from e
+        ) from error
     if integrity != "ok":
         raise DatabaseCorrupt(
             f"Database at {db_path} failed integrity check: {integrity}. Relay "
@@ -378,16 +653,56 @@ def connect_existing(db_path: Path, *, read_only: bool = False) -> sqlite3.Conne
     if read_only:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
         conn.row_factory = sqlite3.Row
+        with _refused_when_sqlite_cannot_open(conn, db_path):
+            _refuse_unreadable_version(conn, db_path)
         return conn
 
     # Only now, having confirmed the file is healthy, open the real
-    # read-write connection this process will actually use.
+    # read-write connection this process will actually use. Its version is
+    # read on this connection, not the probe: immutable=1 ignores the WAL,
+    # so the probe could see a stale one.
     conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    with _refused_when_sqlite_cannot_open(conn, db_path):
+        conn.execute("PRAGMA foreign_keys = ON")
+        _refuse_unknown_version(conn, db_path)
+        conn.execute("PRAGMA journal_mode = WAL")
+    _upgrade_if_behind(conn, db_path)
     init_schema(conn)
     return conn
+
+
+@contextmanager
+def _refused_when_sqlite_cannot_open(conn: sqlite3.Connection, db_path: Path):
+    """Turn SQLite's own error on the first reads of a new connection into
+    Relay's one-line refusal, closing the connection. These reads come
+    before anything is written, so nothing has changed."""
+    try:
+        yield
+    except sqlite3.Error as error:
+        conn.close()
+        raise LedgerCannotBeOpened(
+            f"Relay could not open the ledger at {db_path} ({error}). SQLite needs to "
+            f"make {db_path.name}-wal and {db_path.name}-shm beside it when they are "
+            f"missing, so {db_path.parent} must be writable by this user. Nothing was changed."
+        ) from error
+
+
+def _refuse_unreadable_version(conn: sqlite3.Connection, db_path: Path) -> None:
+    """For a read-only connection: refuse a ledger from a newer Relay, and
+    one behind this Relay that a pending step must change before it reads
+    correctly. A ledger behind only by steps that leave it readable is read
+    as it is."""
+    _refuse_unknown_version(conn, db_path)
+    found, latest = ledger_version(conn), latest_ledger_version()
+    if all(upgrade.readable_before for upgrade in _pending_upgrades(found, latest)):
+        return
+    conn.close()
+    raise LedgerNeedsUpgrade(
+        f"The ledger at {db_path} is version {found} and this Relay reads version {latest}; "
+        "it must be upgraded before it can be read. Run any Relay command that opens it for "
+        "writing, such as 'relay list', to upgrade it (Relay backs it up first). Nothing was changed."
+    )
 
 
 def init_database(db_path: Path) -> sqlite3.Connection:
@@ -408,6 +723,28 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+@contextmanager
+def transaction(conn: sqlite3.Connection):
+    """Every ledger write runs inside this. Outside any transaction it
+    begins one (BEGIN IMMEDIATE, so the write lock is taken up front),
+    commits when the block ends and rolls back if it raises. Inside one it
+    joins it and commits nothing, so a command can make several record_*
+    calls and have them land together or not at all.
+
+    Python's own `with conn:` would commit on exit even when nested, which
+    is why the ledger never uses it for a write."""
+    if conn.in_transaction:
+        yield conn
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Task lifecycle
 # ---------------------------------------------------------------------------
@@ -418,54 +755,100 @@ def task_exists(conn: sqlite3.Connection, task_id: str) -> bool:
 
 
 def _insert_task_row(conn: sqlite3.Connection, task_id: str, *, repo: str | None,
-                      deploy_intent: bool, current_phase: str) -> None:
+                      deploy_intent: bool, current_phase: str, created: str | None = None,
+                      updated: str | None = None, worktree_path: str | None = None,
+                      branch: str | None = None, base: str | None = None,
+                      next_step: int = 1) -> None:
     """The actual INSERT + task_created event, with no transaction
     management of its own -- the caller owns the transaction boundary.
 
-    This exists so create_task() (a standalone, self-committing call) and
-    import_task() (which needs task-row creation to be part of ONE larger
-    transaction alongside its steps/events/history writes: see the
-    comment in import_task) share the exact same insert logic instead of import_task
-    re-implementing it or calling a self-committing create_task() and
-    silently losing atomicity across the two.
+    This exists so create_task() and import_task() (which needs task-row
+    creation to be part of ONE larger transaction alongside its
+    steps/events/history writes) share the exact same insert logic. The
+    optional keywords default to what a task created now has; the
+    task_created event carries the task's `updated` time.
     """
     _require_configured()
     if current_phase not in _valid_phases and current_phase != "done":
         raise InvalidTransition(f"cannot create task in unknown phase '{current_phase}'")
     now = _now()
+    created, updated = created or now, updated or now
     conn.execute(
         """INSERT INTO tasks
            (task_id, repo, created, updated, status, current_phase,
             next_step, deploy_intent, worktree_path, branch, base, schema_version)
-           VALUES (?, ?, ?, ?, 'in_progress', ?, 1, ?, NULL, NULL, NULL, ?)""",
-        (task_id, repo, now, now, current_phase, int(deploy_intent), SCHEMA_VERSION),
+           VALUES (?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)""",
+        (task_id, repo, created, updated, current_phase, next_step, int(deploy_intent),
+         worktree_path, branch, base, SCHEMA_VERSION),
     )
     conn.execute(
         "INSERT INTO events (task_id, event_type, phase, timestamp) VALUES (?, ?, ?, ?)",
-        (task_id, EVENT_TASK_CREATED, current_phase, now),
+        (task_id, EVENT_TASK_CREATED, current_phase, updated),
     )
 
 
 def create_task(conn: sqlite3.Connection, task_id: str, *, repo: str | None = None,
-                 deploy_intent: bool = False, current_phase: str = "architect") -> dict:
-    """Create a new task row. Mirrors init_run_state()'s defaults exactly.
+                deploy_intent: bool = False, current_phase: str = "architect",
+                created: str | None = None, updated: str | None = None,
+                worktree_path: str | None = None, branch: str | None = None,
+                base: str | None = None, next_step: int = 1) -> dict:
+    """Create a new task row, status in_progress, and its task_created
+    event. `relay start` passes the run state it built (run_state.create_run);
+    the defaults are a task created now with nothing recorded yet.
 
     "done" is accepted alongside the real phases -- it is the same sentinel
     Relay itself stores in run.yaml's current_phase once a workflow
-    completes (see cmd_next's "Workflow complete" branch and cmd_override's
-    `allowed = VALID_PHASES + ["done"]`), not a real phase with steps/verdicts
-    of its own. record_step_and_save() makes the same exception, so
-    import_task() can carry a legacy task's real "done" phase through.
-
-    Standalone callers of create_task() get their own self-contained
-    transaction (this function's own `with conn:`). import_task() does not
-    call this function directly: see the comment in import_task for why
-    (atomicity across task creation and the rest of the import).
+    completes, not a real phase with steps/verdicts of its own.
     """
-    with conn:
+    with transaction(conn):
         _insert_task_row(conn, task_id, repo=repo, deploy_intent=deploy_intent,
-                          current_phase=current_phase)
+                         current_phase=current_phase, created=created, updated=updated,
+                         worktree_path=worktree_path, branch=branch, base=base,
+                         next_step=next_step)
     return get_task(conn, task_id)
+
+
+def update_task(conn: sqlite3.Connection, task_id: str, *, status: str | None,
+                current_phase: str | None, next_step: int | None, updated: str | None,
+                deploy_intent: bool, repo: str | None, worktree_path: str | None,
+                branch: str | None, base: str | None) -> None:
+    """Write the task row's own fields: what save_run_state() saves. A None
+    status, phase or next step keeps the stored one; `updated` defaults to
+    now. A state_saved event is written only when the status or the current
+    phase actually changes, with both as [before, after].
+
+    Steps, verdicts and retries are not task fields and are never written
+    here: each has its own call (record_dispatch, record_verdict,
+    record_retry)."""
+    _require_configured()
+    if current_phase and current_phase != "done" and current_phase not in _valid_phases:
+        raise InvalidTransition(f"cannot save task in unknown phase '{current_phase}'")
+    if status and status not in _valid_statuses:
+        raise InvalidTransition(f"cannot save task with unknown status '{status}'")
+    when = updated or _now()
+    with transaction(conn):
+        before = conn.execute("SELECT status, current_phase, next_step FROM tasks WHERE task_id = ?",
+                              (task_id,)).fetchone()
+        if before is None:
+            raise ValueError(f"no such task: {task_id}")
+        after_status = status or before["status"]
+        after_phase = current_phase or before["current_phase"]
+        conn.execute(
+            """UPDATE tasks SET repo=?, updated=?, status=?, current_phase=?,
+                   next_step=?, deploy_intent=?, worktree_path=?, branch=?, base=?
+               WHERE task_id=?""",
+            (repo, when, after_status, after_phase,
+             before["next_step"] if next_step is None else next_step, int(bool(deploy_intent)),
+             worktree_path, branch, base, task_id),
+        )
+        if (after_status, after_phase) == (before["status"], before["current_phase"]):
+            return
+        payload = json.dumps({"status": [before["status"], after_status],
+                              "current_phase": [before["current_phase"], after_phase]})
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, payload, timestamp) VALUES (?,?,?,?,?)",
+            (task_id, EVENT_STATE_SAVED, after_phase, payload, when),
+        )
 
 
 def get_task(conn: sqlite3.Connection, task_id: str) -> dict | None:
@@ -518,8 +901,6 @@ def get_history(conn: sqlite3.Connection, task_id: str) -> list[dict]:
     return history
 
 
-# Python: dict[str, int] is a type hint: keys are str, values are int. Hints
-#   aren't enforced at runtime; they document intent for readers and tools.
 def get_retry_counts(conn: sqlite3.Connection, task_id: str) -> dict[str, int]:
     """Automatic rounds into each phase since the owner last decided, read
     from the task's events in the order they were written.
@@ -527,12 +908,12 @@ def get_retry_counts(conn: sqlite3.Connection, task_id: str) -> dict[str, int]:
     A retry event (Relay routed the task back on its own) adds one to its
     phase. A send-back or an override into a phase is the owner's decision
     and starts that phase's count again; so does an override out of a stop
-    at the limit, for the phase the limit stopped. Nothing is stored: a ledger written
-    before this rule is read by it too, and there a send-back's own retry
+    at the limit, for the phase the limit stopped. Nothing is stored, so an
+    older ledger is read by the same rule; there a send-back's own retry
     event sits just before its sent_back event, which clears it.
 
-    builder and reviewer are always present (as they were before every
-    routing loopback counted) so existing projections stay identical."""
+    builder and reviewer are always present, at 0 when nothing counted, so
+    run.yaml keeps the same shape."""
     counts = {"builder": 0, "reviewer": 0}
     rows = conn.execute(
         # Python: The ? placeholders are parameter binding: sqlite3 inserts the values
@@ -628,9 +1009,9 @@ def sync_step_verdict_from_file(conn: sqlite3.Connection, task_id: str, step: in
     """
     _require_configured()
     path = task_dir / artifact_filename
-    if not path.exists():
+    text = report_text(path)
+    if text is None:
         return None
-    text = path.read_text()
     try:
         fm = _parse_frontmatter_text(text)
     except ValueError:  # a frontmatter that cannot be read: no verdict, as with none
@@ -639,16 +1020,28 @@ def sync_step_verdict_from_file(conn: sqlite3.Connection, task_id: str, step: in
     if not verdict or verdict not in _valid_verdicts.get(phase, []):
         return None
     content_hash = _hash_file(path)
-    with conn:
+    with transaction(conn):
         conn.execute(
             "UPDATE steps SET verdict=?, content_hash=? WHERE task_id=? AND step=?",
             (verdict, content_hash, task_id, step),
         )
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, step, verdict, timestamp) VALUES (?,?,?,?,?,?)",
-            (task_id, "verdict_recorded", phase, step, verdict, _now()),
+            (task_id, EVENT_VERDICT_RECORDED, phase, step, verdict, _now()),
         )
     return verdict
+
+
+def report_text(path: Path) -> str | None:
+    """A report file's text, or None when there is no regular file at
+    `path` (none, a folder, a named pipe) or its bytes are not UTF-8. A
+    report Relay cannot read has no verdict, as one with no frontmatter."""
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def get_step_artifacts(conn: sqlite3.Connection, task_id: str) -> dict[int, str]:
@@ -675,122 +1068,60 @@ def _hash_file(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def record_step_and_save(conn: sqlite3.Connection, task_id: str, state: dict,
-                          *, task_dir: Path | None = None) -> None:
-    """The sqlite-backend replacement for save_run_state().
-
-    Relay's existing call sites mutate a run-state dict in place
-    (init_run_state / record_phase / direct field assignment) and then call
-    save_run_state(task_id, state) once. This function is the drop-in
-    sqlite equivalent: it upserts the tasks row from the dict exactly as
-    save_run_state() would write run.yaml, then reconciles state["history"]
-    against the steps table -- inserting any step not yet recorded, and
-    backfilling a verdict onto an existing step row when cmd_next's
-    "attach verdict to the matching history entry" logic has just done that
-    in memory. retries[] in the dict is never written directly (see
-    get_retry_counts) -- a retry event is appended only when a phase's count
-    in the dict is above the count the ledger's events give, which is exactly
-    the +1-at-a-time pattern increment_retry() produces. A count set back to
-    zero writes nothing here: the sent_back or approval event is the reset.
-
-    All of this happens in a single transaction: a state save either lands
-    completely, or not at all.
-    """
+def _require_phase(phase: str) -> None:
     _require_configured()
-    phase = state.get("current_phase")
-    if phase and phase != "done" and phase not in _valid_phases:
-        raise InvalidTransition(f"cannot save task in unknown phase '{phase}'")
-    status = state.get("status")
-    if status and status not in _valid_statuses:
-        raise InvalidTransition(f"cannot save task with unknown status '{status}'")
+    if phase not in _valid_phases:
+        raise InvalidTransition(f"unknown phase '{phase}'")
 
-    now = state.get("updated") or _now()
-    existing = get_task(conn, task_id)
 
-    with conn:
-        if existing is None:
-            conn.execute(
-                """INSERT INTO tasks (task_id, repo, created, updated, status,
-                       current_phase, next_step, deploy_intent, worktree_path,
-                       branch, base, schema_version)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (task_id, state.get("repo"), state.get("created", now), now,
-                 status or "in_progress", phase or "architect",
-                 state.get("next_step", 1), int(bool(state.get("deploy_intent"))),
-                 state.get("worktree_path"), state.get("branch"), state.get("base"),
-                 state.get("schema_version", SCHEMA_VERSION)),
-            )
-            conn.execute(
-                "INSERT INTO events (task_id, event_type, phase, timestamp) VALUES (?,?,?,?)",
-                (task_id, EVENT_TASK_CREATED, phase, now),
-            )
-        else:
-            conn.execute(
-                """UPDATE tasks SET repo=?, updated=?, status=?, current_phase=?,
-                       next_step=?, deploy_intent=?, worktree_path=?, branch=?, base=?
-                   WHERE task_id=?""",
-                (state.get("repo"), now, status or existing["status"],
-                 phase or existing["current_phase"], state.get("next_step", existing["next_step"]),
-                 int(bool(state.get("deploy_intent"))), state.get("worktree_path"),
-                 state.get("branch"), state.get("base"), task_id),
-            )
-            payload = json.dumps({
-                "status": [existing["status"], status],
-                "current_phase": [existing["current_phase"], phase],
-            })
-            conn.execute(
-                "INSERT INTO events (task_id, event_type, phase, payload, timestamp) VALUES (?,?,?,?,?)",
-                (task_id, EVENT_STATE_SAVED, phase, payload, now),
-            )
+def record_dispatch(conn: sqlite3.Connection, task_id: str, *, phase: str, step: int,
+                    artifact_filename: str, created_at: str, task_dir: Path | None = None) -> None:
+    """Record that a step was started: its phase, its number, and the report
+    file its agent was told to write, exactly as the prompt named it. The
+    verdict is not known yet (NULL). With task_dir, the report's hash is
+    stored if the file is already there. A step number used twice raises."""
+    _require_phase(phase)
+    content_hash = _hash_file(task_dir / artifact_filename) if task_dir is not None else None
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO steps (task_id, step, phase, verdict, artifact_filename,
+                   content_hash, created_at) VALUES (?,?,?,NULL,?,?,?)""",
+            (task_id, step, phase, artifact_filename, content_hash, created_at),
+        )
 
-        # Reconcile history[] against steps.
-        known_steps = {
-            r["step"]: r["verdict"]
-            for r in conn.execute("SELECT step, verdict FROM steps WHERE task_id = ?", (task_id,))
-        }
-        for entry in state.get("history", []):
-            step = entry.get("step")
-            if step is None:
-                continue
-            entry_phase = entry.get("phase")
-            entry_verdict = entry.get("verdict")
-            if entry_phase not in _valid_phases:
-                raise InvalidTransition(f"cannot record step {step} in unknown phase '{entry_phase}'")
-            if entry_verdict and entry_verdict not in _valid_verdicts.get(entry_phase, []):
-                raise InvalidTransition(
-                    f"cannot record verdict '{entry_verdict}' for phase '{entry_phase}'"
-                )
-            if step not in known_steps:
-                from agents import artifact_name  # local import: avoids a cycle at module load
-                filename = artifact_name(entry_phase, step, state)
-                content_hash = None
-                if task_dir is not None:
-                    content_hash = _hash_file(task_dir / filename)
-                conn.execute(
-                    """INSERT INTO steps (task_id, step, phase, verdict, artifact_filename,
-                           content_hash, created_at) VALUES (?,?,?,?,?,?,?)""",
-                    (task_id, step, entry_phase, entry_verdict, filename, content_hash,
-                     entry.get("timestamp", now)),
-                )
-            elif entry_verdict and known_steps[step] != entry_verdict:
-                content_hash = None
-                if task_dir is not None:
-                    from agents import artifact_name
-                    filename = artifact_name(entry_phase, step, state)
-                    content_hash = _hash_file(task_dir / filename)
-                conn.execute(
-                    "UPDATE steps SET verdict=?, content_hash=COALESCE(?, content_hash) WHERE task_id=? AND step=?",
-                    (entry_verdict, content_hash, task_id, step),
-                )
 
-        # Retry events: append one per +1 over the count the events give.
-        stored_counts = get_retry_counts(conn, task_id)
-        for retry_phase, count in (state.get("retries") or {}).items():
-            for _ in range(max(0, count - stored_counts.get(retry_phase, 0))):
-                conn.execute(
-                    "INSERT INTO events (task_id, event_type, phase, timestamp) VALUES (?,?,?,?)",
-                    (task_id, EVENT_RETRY, retry_phase, now),
-                )
+def record_verdict(conn: sqlite3.Connection, task_id: str, *, step: int, phase: str,
+                   verdict: str, task_dir: Path | None = None) -> None:
+    """Record a step's verdict. Writes only when it differs from the stored
+    one; with task_dir, the report's hash is refreshed from the file the
+    step row names. The step must exist and be of `phase`."""
+    _require_phase(phase)
+    if verdict not in _valid_verdicts.get(phase, []):
+        raise InvalidTransition(f"cannot record verdict '{verdict}' for phase '{phase}'")
+    with transaction(conn):
+        row = conn.execute("SELECT phase, verdict, artifact_filename FROM steps "
+                           "WHERE task_id = ? AND step = ?", (task_id, step)).fetchone()
+        if row is None or row["phase"] != phase:
+            raise ValueError(f"no {phase} step {step} for task {task_id}")
+        if row["verdict"] == verdict:
+            return
+        content_hash = _hash_file(task_dir / row["artifact_filename"]) if task_dir is not None else None
+        conn.execute(
+            "UPDATE steps SET verdict=?, content_hash=COALESCE(?, content_hash) "
+            "WHERE task_id=? AND step=?",
+            (verdict, content_hash, task_id, step),
+        )
+
+
+def record_retry(conn: sqlite3.Connection, task_id: str, *, phase: str) -> None:
+    """Record one automatic round into `phase`: Relay routed the task back
+    on its own. get_retry_counts() counts these."""
+    _require_phase(phase)
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, timestamp) VALUES (?,?,?,?)",
+            (task_id, EVENT_RETRY, phase, _now()),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -817,7 +1148,7 @@ def record_approval(conn: sqlite3.Connection, task_id: str, *, phase: str,
     if stopped_phase:
         details["stopped_phase"] = stopped_phase
     payload = json.dumps(details)
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, payload, timestamp) VALUES (?,?,?,?,?)",
             (task_id, EVENT_APPROVAL, phase, payload, _now()),
@@ -830,7 +1161,7 @@ def record_sent_back(conn: sqlite3.Connection, task_id: str, *, from_phase: str,
     deliberately not an approval: nothing was accepted. It also starts
     to_phase's count of automatic rounds again (see get_retry_counts)."""
     payload = json.dumps({"to_phase": to_phase, "note": note})
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, verdict, payload, timestamp) VALUES (?,?,?,?,?,?)",
             (task_id, EVENT_SENT_BACK, from_phase, verdict, payload, _now()),
@@ -843,7 +1174,7 @@ def record_test_run(conn: sqlite3.Connection, task_id: str, *, phase: str, step:
     commit, the command, how it came out and the counts. This is the
     evidence the roles and the routing rely on, in place of an agent's
     account of its own test results."""
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
             (task_id, EVENT_TEST_RUN, phase, step, json.dumps(run), _now()),
@@ -852,12 +1183,24 @@ def record_test_run(conn: sqlite3.Connection, task_id: str, *, phase: str, step:
 
 def record_test_command_accepted(conn: sqlite3.Connection, task_id: str, *, phase: str,
                                  step: int | None, command: str, test_report: str | None,
-                                 commit: str | None) -> None:
-    """Record that the owner accepted a test command the task's base branch
-    does not have. Its own event, tied to the exact command and report
-    path, so no other approval can stand in for it."""
-    payload = json.dumps({"command": command, "test_report": test_report, "commit": commit})
-    with conn:
+                                 commit: str | None, harness_digest: str | None = None,
+                                 tests_run: int | None = None,
+                                 harness_unchecked_at: str | None = None) -> None:
+    """Record that the owner accepted what a passing test run flagged: a
+    test command the task's base branch does not have, and, when the run
+    flagged them, its changed harness files (by digest), its number of
+    tests run, and the commit whose harness Relay could not check. Its own event, tied to exactly what was shown, so no other
+    approval can stand in for it. The later keys are written only when set,
+    so a command-only acceptance holds just its three keys."""
+    accepted = {"command": command, "test_report": test_report, "commit": commit}
+    if harness_digest is not None:
+        accepted["harness_digest"] = harness_digest
+    if tests_run is not None:
+        accepted["tests_run"] = tests_run
+    if harness_unchecked_at is not None:
+        accepted["harness_unchecked_at"] = harness_unchecked_at
+    payload = json.dumps(accepted)
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
             (task_id, EVENT_TEST_COMMAND_ACCEPTED, phase, step, payload, _now()),
@@ -868,7 +1211,7 @@ def record_owner_note(conn: sqlite3.Connection, task_id: str, *, phase: str | No
                       step: int | None, note: str) -> None:
     """Record something the owner said about the task without moving it:
     a decision, a correction, a fact. Later agents are given it."""
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
             (task_id, EVENT_OWNER_NOTE, phase, step, json.dumps({"note": note}), _now()),
@@ -880,10 +1223,74 @@ def record_slept_during_step(conn: sqlite3.Connection, task_id: str, *, phase: s
     """Record that the machine went to sleep while a step was open, so the
     time the step took can be read for what it was. `sleep` holds how many
     times it slept, for how long in all, and when the first and last began."""
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
             (task_id, EVENT_SLEPT_DURING_STEP, phase, step, json.dumps(sleep), _now()),
+        )
+
+
+def record_time_limit_stop(conn: sqlite3.Connection, task_id: str, *, phase: str,
+                           step: int | None, limit_seconds: int, ran_seconds: int) -> None:
+    """Record that Relay stopped a role started under --auto because it ran
+    past its time limit: the limit it had and how long it ran, in seconds."""
+    payload = json.dumps({"limit_seconds": limit_seconds, "ran_seconds": ran_seconds})
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
+            (task_id, EVENT_TIME_LIMIT_STOP, phase, step, payload, _now()),
+        )
+
+
+def record_arbiter_started(conn: sqlite3.Connection, task_id: str, *, step: int, report: str,
+                           situation: str, trigger: dict) -> None:
+    """Record that the Arbiter was dispatched: its step, the report it
+    writes, the situation it is called in and the report it rules on
+    (`trigger`: {step, phase, verdict})."""
+    payload = json.dumps({"report": report, "situation": situation, "trigger": trigger})
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
+            (task_id, EVENT_ARBITER_STARTED, "arbiter", step, payload, _now()),
+        )
+
+
+def record_arbiter_ruling(conn: sqlite3.Connection, task_id: str, *, step: int, report: str,
+                          situation: str, ruling: dict, routed: bool, outcome: str) -> None:
+    """Record the Arbiter's ruling as Relay acted on it. The verdict column
+    holds the decision; `ruling` holds the checked fields only, never the
+    report's prose. `routed` is True when Relay moved the task on it, and
+    `outcome` is Relay's one line on what it did."""
+    payload = json.dumps({"report": report, "situation": situation, "ruling": ruling,
+                          "routed": routed, "outcome": outcome})
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, verdict, payload, timestamp) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (task_id, EVENT_ARBITER_RULED, "arbiter", step, ruling.get("decision"), payload, _now()),
+        )
+
+
+def record_arbiter_unreadable(conn: sqlite3.Connection, task_id: str, *, step: int, report: str,
+                              problem: str) -> None:
+    """Record that Relay could not act on an Arbiter's report, and why."""
+    payload = json.dumps({"report": report, "problem": problem})
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
+            (task_id, EVENT_ARBITER_UNREADABLE, "arbiter", step, payload, _now()),
+        )
+
+
+def record_follow_ups(conn: sqlite3.Connection, task_id: str, *, step: int, phase: str,
+                      report: str, items: list[dict]) -> None:
+    """Record the findings the owner accepted and logged as follow-ups at a
+    gate. Each item is {kind, text, severity, from}."""
+    payload = json.dumps({"report": report, "items": items})
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
+            (task_id, EVENT_FOLLOW_UPS_LOGGED, phase, step, payload, _now()),
         )
 
 
@@ -892,16 +1299,83 @@ def record_deploy_decision(conn: sqlite3.Connection, task_id: str, *, step: int 
     """Record the Architect's deploy decision when it changes the task's
     deploy intent, so the switch is part of the task's history."""
     payload = json.dumps({"previous": previous, "decided": decided, "source": "architect"})
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
             (task_id, EVENT_DEPLOY_DECIDED, "architect", step, payload, _now()),
         )
 
 
+def record_sizing_change(conn: sqlite3.Connection, task_id: str, *, before: dict, after: dict,
+                         reason: str, by: str, phase: str | None, step: int | None) -> None:
+    """Record a change to the task's sizing as a further `sized` event.
+    `before` and `after` are {size, risky, deploy}. The top-level keys are
+    the start event's, so any reader of `sized` reads the new sizing;
+    `from`, `reason` and `trigger` ({by, step}, set by Relay, never read
+    from a report) say what changed it."""
+    payload = json.dumps({"size": after["size"], "risky": after["risky"], "deploy": after.get("deploy"),
+                          "note": None, "from": {"size": before["size"], "risky": before["risky"]},
+                          "reason": reason, "trigger": {"by": by, "step": step}})
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
+            (task_id, EVENT_SIZED, phase, step, payload, _now()),
+        )
+
+
+def record_risk_hint(conn: sqlite3.Connection, task_id: str, *, step: int | None, hint: dict) -> None:
+    """Record the sizing hint worked out after the Builder step `step`."""
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
+            (task_id, EVENT_RISK_HINT, "builder", step, json.dumps(hint), _now()),
+        )
+
+
+def record_sizing_judgment(conn: sqlite3.Connection, task_id: str, *, phase: str, step: int | None,
+                           judgment: dict) -> None:
+    """Record what a judging role's report said of the sizing: {by, answer,
+    reason, refused, unanswered, hint: {category: count}}."""
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
+            (task_id, EVENT_SIZING_JUDGED, phase, step, json.dumps(judgment), _now()),
+        )
+
+
+def record_base_confirmed(conn: sqlite3.Connection, task_id: str, *, base: str, ref: str | None,
+                          commit: str, previous: str | None, how: str) -> None:
+    """Record the commit Relay confirmed for the task's base: `base` is the
+    name the owner gave, `ref` the full ref it was confirmed through (None
+    for a commit id the owner typed), `previous` the commit it moved from,
+    and `how` one of "start", "first" or "moved"."""
+    payload = {"base": base, "ref": ref, "commit": commit, "from": previous, "how": how}
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO events (task_id, event_type, payload, timestamp) VALUES (?,?,?,?)",
+            (task_id, EVENT_BASE_CONFIRMED, json.dumps(payload), _now()),
+        )
+
+
+def latest_base_confirmed(conn: sqlite3.Connection, task_id: str) -> dict | None:
+    """The payload of the newest base_confirmed event for the task, or None
+    when it has none or the payload is not a JSON object."""
+    row = conn.execute(
+        "SELECT payload FROM events WHERE task_id = ? AND event_type = ? ORDER BY id DESC LIMIT 1",
+        (task_id, EVENT_BASE_CONFIRMED),
+    ).fetchone()
+    if row is None or not row["payload"]:
+        return None
+    try:
+        payload = json.loads(row["payload"])
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def record_event(conn: sqlite3.Connection, task_id: str, event_type: str, payload: dict) -> None:
     """Record one event with a JSON payload and no phase or step."""
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, payload, timestamp) VALUES (?,?,?,?)",
             (task_id, event_type, json.dumps(payload), _now()),
@@ -919,7 +1393,7 @@ def open_tasks_in(conn: sqlite3.Connection, worktree_path: str) -> list[str]:
 def record_worktree_event(conn: sqlite3.Connection, task_id: str, *, created: bool,
                            detail: str) -> None:
     event_type = EVENT_WORKTREE_CREATED if created else EVENT_WORKTREE_FINALIZED
-    with conn:
+    with transaction(conn):
         conn.execute(
             "INSERT INTO events (task_id, event_type, payload, timestamp) VALUES (?,?,?,?)",
             (task_id, event_type, json.dumps({"detail": detail}), _now()),
@@ -936,9 +1410,22 @@ def get_events(conn: sqlite3.Connection, task_id: str) -> list[dict]:
         d = {"event_type": r["event_type"], "phase": r["phase"], "step": r["step"],
              "verdict": r["verdict"], "timestamp": r["timestamp"]}
         if r["payload"]:
-            d["payload"] = json.loads(r["payload"])
+            d["payload"] = _event_payload(task_id, r["event_type"], r["payload"])
         out.append(d)
     return out
+
+
+def _event_payload(task_id: str, event_type: str, payload: str):
+    """An event's payload, read back from its JSON. Relay writes only JSON,
+    so one it cannot read (not JSON, or nested too deep) is a hand-edited
+    row, raised as UnreadableEvent rather than guessed at."""
+    try:
+        return json.loads(payload)
+    except (ValueError, RecursionError):
+        raise UnreadableEvent(
+            f"an event of task {task_id} ({event_type}) has a payload Relay cannot read as JSON, "
+            f"so it cannot read the task's record. Relay never writes one; a hand edit of the "
+            f"ledger does. Correct or remove that row.") from None
 
 
 # ---------------------------------------------------------------------------
@@ -1002,9 +1489,7 @@ def projection_is_stale(conn: sqlite3.Connection, task_id: str, task_dir: Path) 
 
 
 # ---------------------------------------------------------------------------
-# Migration: dry-run + conflict detection against the real file corpus.
-# No writes to the source files or to `conn` happen in this section --
-# dry_run_migration() is read-only by construction.
+# Report frontmatter, read by the verdict sync above (and by migrate_legacy)
 # ---------------------------------------------------------------------------
 
 def _parse_frontmatter_text(text: str) -> dict:
@@ -1015,840 +1500,3 @@ def _parse_frontmatter_text(text: str) -> dict:
         return bounded_yaml.frontmatter(text)
     except bounded_yaml.NotRead as problem:
         raise ValueError(f"frontmatter {problem}") from problem
-
-
-def read_file_state(task_dir: Path) -> dict:
-    """Read a task's on-disk state exactly as the files backend in run_state.py does:
-    run.yaml plus every numbered artifact's frontmatter. Read-only."""
-    run_yaml_path = task_dir / "run.yaml"
-    run_yaml = {}
-    if run_yaml_path.exists():
-        run_yaml = _yaml.safe_load(run_yaml_path.read_text()) or {}
-
-    artifacts = []
-    for f in sorted(task_dir.iterdir()) if task_dir.exists() else []:
-        if f.suffix != ".md" or not f.name[0:2].isdigit():
-            continue
-        step_num = int(f.name[0:2])
-        if step_num >= 90:
-            continue  # human artifacts, not agent phase output
-        frontmatter_error = None
-        try:
-            fm = _parse_frontmatter_text(f.read_text())
-        except ValueError as error:
-            fm, frontmatter_error = {}, str(error)
-        artifacts.append({
-            "frontmatter_error": frontmatter_error,
-            "step": step_num,
-            "filename": f.name,
-            "phase": fm.get("phase"),
-            "verdict": fm.get("verdict"),
-            "date": fm.get("date"),  # day-granularity fallback timestamp source
-            "content_hash": _hash_file(f),
-        })
-    artifacts.sort(key=lambda a: a["step"])
-    return {"run_yaml": run_yaml, "artifacts": artifacts}
-
-
-def reconcile_task(task_id: str, file_state: dict, *, check_step_sequence: bool = True,
-                   check_phase_agreement: bool = True) -> dict:
-    """Compare run.yaml against the artifact trail for one task, exactly as
-    check_state_consistency() does, plus enum validation against the
-    configured VALID_STATUSES/VALID_PHASES/VALID_VERDICTS.
-
-    Never picks a winner. Returns {task_id, ok, discrepancies: [...]} --
-    ok is False if anything disagrees or violates an enum; the caller
-    decides what to do, this function only surfaces the finding.
-    """
-    _require_configured()
-    discrepancies = []
-    run_yaml = file_state["run_yaml"]
-    artifacts = file_state["artifacts"]
-
-    status = run_yaml.get("status")
-    if status is not None and status not in _valid_statuses:
-        discrepancies.append(f"run.yaml status '{status}' is not a valid status")
-
-    ry_phase = run_yaml.get("current_phase")
-    if ry_phase is not None and ry_phase not in _valid_phases + ["done"]:
-        discrepancies.append(f"run.yaml current_phase '{ry_phase}' is not a valid phase")
-
-    if artifacts:
-        # Every artifact is examined, not merely the latest one: a bad
-        # phase/verdict buried behind later, otherwise-clean steps (say
-        # step 3 of 7) must be visible in the classification, not just at
-        # import time, or the task would read as CLEAN.
-        for art in artifacts:
-            art_phase = art["phase"]
-            if art.get("frontmatter_error"):
-                discrepancies.append(
-                    f"artifact ({art['filename']}) has unreadable frontmatter: "
-                    f"{art['frontmatter_error']}"
-                )
-                continue
-            if art_phase is None:
-                discrepancies.append(
-                    f"artifact ({art['filename']}) has no YAML frontmatter phase -- "
-                    f"cannot tell which agent phase produced it"
-                )
-                continue
-            if art_phase not in _valid_phases:
-                discrepancies.append(
-                    f"artifact ({art['filename']}) phase '{art_phase}' is not a valid phase"
-                )
-                continue
-            art_verdict = art["verdict"]
-            if art_verdict and art_verdict not in _valid_verdicts.get(art_phase, []):
-                discrepancies.append(
-                    f"artifact ({art['filename']}) verdict '{art_verdict}' "
-                    f"is not valid for phase '{art_phase}'"
-                )
-
-        latest = artifacts[-1]
-        art_phase = latest["phase"]
-        if (check_phase_agreement and ry_phase and art_phase and ry_phase not in ("done",)
-                and ry_phase != art_phase):
-            discrepancies.append(
-                f"run.yaml current_phase ('{ry_phase}') disagrees with latest artifact "
-                f"phase ('{art_phase}', {latest['filename']})"
-            )
-        seen_steps = [a["step"] for a in artifacts]
-        if not check_step_sequence:
-            return {"task_id": task_id, "ok": not discrepancies, "discrepancies": discrepancies}
-        duplicate_steps = sorted({step for step in seen_steps if seen_steps.count(step) > 1})
-        for step in duplicate_steps:
-            filenames = [a["filename"] for a in artifacts if a["step"] == step]
-            discrepancies.append(
-                f"step number {step} is used by more than one artifact: {filenames}"
-            )
-        unique_steps = sorted(set(seen_steps))
-        expected_steps = list(range(unique_steps[0], unique_steps[0] + len(unique_steps)))
-        if unique_steps != expected_steps:
-            discrepancies.append(f"artifact step numbers are not a contiguous ascending sequence: {unique_steps}")
-    elif status == "in_progress":
-        discrepancies.append("status is in_progress but no artifacts exist")
-
-    return {"task_id": task_id, "ok": not discrepancies, "discrepancies": discrepancies}
-
-
-def dry_run_migration(tasks_dir: Path) -> dict:
-    """Scan every task directory under tasks_dir and reconcile it. Purely
-    read-only: no database writes, no file writes. Returns a summary fit
-    for a human to review before any real import happens.
-
-    A directory with neither run.yaml nor numbered agent artifacts is a
-    brief-only task that never started, and is skipped. A directory with
-    agent artifacts but no run.yaml is real historical work: it is always
-    reported, and always flagged, so it can never be silently left out of
-    a migration or imported as clean.
-    """
-    if not tasks_dir.exists():
-        return {"total": 0, "with_run_yaml": 0, "without_run_yaml": 0,
-                "clean": 0, "flagged": 0, "results": []}
-
-    results = []
-    with_run_yaml = 0
-    without_run_yaml = 0
-    for entry in sorted(tasks_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        file_state = read_file_state(entry)
-        has_run_yaml = (entry / "run.yaml").exists()
-        if has_run_yaml:
-            with_run_yaml += 1
-            results.append(reconcile_task(entry.name, file_state))
-            continue
-        if not file_state["artifacts"]:
-            continue  # brief-only task, never started -- nothing to migrate
-        without_run_yaml += 1
-        result = reconcile_task(entry.name, file_state)
-        artifact_steps = [a["step"] for a in file_state["artifacts"]]
-        result["discrepancies"].insert(
-            0,
-            f"no run.yaml, but {len(artifact_steps)} agent artifact(s) exist "
-            f"(steps {artifact_steps}) -- real work with no task state to import",
-        )
-        result["ok"] = False
-        results.append(result)
-
-    flagged = [r for r in results if not r["ok"]]
-    return {
-        "total": len(results),
-        "with_run_yaml": with_run_yaml,
-        "without_run_yaml": without_run_yaml,
-        "clean": len(results) - len(flagged),
-        "flagged": len(flagged),
-        "results": results,
-    }
-
-
-_DECISION_KEYS = frozenset({"task", "status", "current_phase", "exclude", "note",
-                            "step_overrides", "missing_steps", "note_files"})
-_STEP_OVERRIDE_KEYS = frozenset({"step", "expected", "canonical", "note"})
-
-
-# Python: Path (from pathlib) is an object for file paths: path.read_text(),
-#   path.exists(), path / 'name' to join. Safer than gluing strings.
-def load_decisions(path: Path) -> dict[str, MigrationDecision]:
-    """Read a YAML decisions file into MigrationDecisions, keyed by task id.
-
-    Strict on purpose: an unknown key, a wrong type, a duplicate task, or a
-    missing note is an error naming the field, never coerced or ignored. A
-    typo in a decisions file must not quietly become "no decision", and a
-    quoted "false" must not become an exclusion.
-
-    Format:
-        decisions:
-          - task: some-task
-            status: completed
-            current_phase: done
-            note: why this mapping is right
-            missing_steps: [4]
-            note_files: [05-prod-promotion-plan.md]
-            step_overrides:
-              - {step: 1, expected: approved, canonical: ready-for-builder, note: why}
-    """
-    if _yaml is None:
-        raise RuntimeError("PyYAML is required to read a decisions file")
-    try:
-        document = _yaml.safe_load(path.read_text())
-    except _yaml.YAMLError as error:
-        raise ValueError(f"{path}: not valid YAML ({error.__class__.__name__})") from error
-    if not isinstance(document, dict) or not isinstance(document.get("decisions"), list):
-        raise ValueError(f"{path}: expected a mapping with a top-level 'decisions:' list")
-
-    decisions: dict[str, MigrationDecision] = {}
-    # Python: enumerate() yields (index, item) pairs; start=1 makes the count
-    #   human-friendly for error messages ('decision #3').
-    for position, entry in enumerate(document["decisions"], start=1):
-        where = f"{path}: decision #{position}"
-        if not isinstance(entry, dict):
-            raise ValueError(f"{where}: expected a mapping, got {type(entry).__name__}")
-        unknown_keys = set(entry) - _DECISION_KEYS
-        if unknown_keys:
-            raise ValueError(f"{where}: unknown keys {sorted(unknown_keys)}")
-        task_id = _required_text(entry, "task", where)
-        where = f"{path}: decision for '{task_id}'"
-        if task_id in decisions:
-            raise ValueError(f"{path}: more than one decision for '{task_id}'")
-
-        decisions[task_id] = MigrationDecision(
-            task_id=task_id,
-            status=_optional_text(entry, "status", where),
-            current_phase=_optional_text(entry, "current_phase", where),
-            exclude=_optional_bool(entry, "exclude", where),
-            note=_required_text(entry, "note", where),
-            step_overrides=tuple(_load_step_override(override, where)
-                                 for override in _optional_list(entry, "step_overrides", where)),
-            missing_steps=tuple(_list_of(entry, "missing_steps", int, where)),
-            note_files=tuple(_list_of(entry, "note_files", str, where)),
-        )
-    return decisions
-
-
-def _load_step_override(override, where: str) -> StepVerdictOverride:
-    if not isinstance(override, dict):
-        raise ValueError(f"{where}: each step override must be a mapping")
-    unknown_keys = set(override) - _STEP_OVERRIDE_KEYS
-    if unknown_keys:
-        raise ValueError(f"{where}: unknown keys {sorted(unknown_keys)} in a step override")
-    step = override.get("step")
-    if not isinstance(step, int) or isinstance(step, bool):
-        raise ValueError(f"{where}: step override 'step' must be an integer")
-    return StepVerdictOverride(
-        step=step,
-        expected_verdict=_required_text(override, "expected", where),
-        canonical_verdict=_required_text(override, "canonical", where),
-        note=_required_text(override, "note", where),
-    )
-
-
-def _required_text(mapping: dict, key: str, where: str) -> str:
-    value = mapping.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{where}: '{key}' must be a non-empty string")
-    return value
-
-
-def _optional_text(mapping: dict, key: str, where: str) -> str | None:
-    if mapping.get(key) is None:
-        return None
-    return _required_text(mapping, key, where)
-
-
-def _optional_bool(mapping: dict, key: str, where: str) -> bool:
-    value = mapping.get(key, False)
-    if not isinstance(value, bool):
-        raise ValueError(f"{where}: '{key}' must be true or false (unquoted), got {value!r}")
-    return value
-
-
-def _optional_list(mapping: dict, key: str, where: str) -> list:
-    value = mapping.get(key)
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise ValueError(f"{where}: '{key}' must be a list, got {type(value).__name__}")
-    return value
-
-
-# Python: isinstance(x, SomeType) checks a value's type at runtime. bool is a
-#   subclass of int in Python, so True would pass as an int; that's why
-#   the check below rejects bools explicitly.
-def _list_of(mapping: dict, key: str, item_type: type, where: str) -> list:
-    items = _optional_list(mapping, key, where)
-    for item in items:
-        if not isinstance(item, item_type) or isinstance(item, bool):
-            raise ValueError(f"{where}: every item in '{key}' must be a {item_type.__name__}, "
-                             f"got {item!r}")
-    return items
-
-
-def rehearse_migration(tasks_dir: Path, decisions: dict[str, MigrationDecision]) -> dict:
-    """Prove what a real import would do, without touching the real database
-    or any file: every task is imported into a throwaway in-memory SQLite
-    database, with its decision if it has one.
-
-    Every scanned task lands in exactly one bucket:
-      clean      -- no discrepancies, no decision needed
-      resolved   -- had discrepancies (or a decision) and imports cleanly with it
-      excluded   -- a decision deliberately leaves it out
-      unresolved -- would fail to import; the reason says why
-    Decisions naming a task the scan never saw are reported, not ignored.
-    """
-    summary = dry_run_migration(tasks_dir)
-    buckets: dict[str, list] = {"clean": [], "resolved": [], "excluded": [],
-                                "unresolved": [], "unknown_decisions": []}
-
-    # Python: ':memory:' is a database that lives only in RAM and vanishes when
-    #   closed, which makes it a perfect throwaway rehearsal space.
-    scratch = sqlite3.connect(":memory:")
-    scratch.row_factory = sqlite3.Row
-    scratch.execute("PRAGMA foreign_keys = ON")
-    init_schema(scratch)
-
-    scanned_task_ids = set()
-    try:
-        # Python: try/finally (around this call): the finally block runs even if an
-        #   exception escapes, so the scratch connection is always closed.
-        _rehearse_each_task(summary, decisions, tasks_dir, scratch, buckets, scanned_task_ids)
-    finally:
-        scratch.close()
-    buckets["unknown_decisions"] = sorted(set(decisions) - scanned_task_ids)
-    return {"scanned": summary["total"], **buckets}
-
-
-def _rehearse_each_task(summary: dict, decisions: dict, tasks_dir: Path,
-                        scratch: sqlite3.Connection, buckets: dict, scanned_task_ids: set) -> None:
-    for result in summary["results"]:
-        task_id = result["task_id"]
-        scanned_task_ids.add(task_id)
-        decision = decisions.get(task_id)
-        if decision is not None and decision.exclude:
-            buckets["excluded"].append(task_id)
-            continue
-        if decision is None and not result["ok"]:
-            buckets["unresolved"].append((task_id, "flagged and no decision: "
-                                          + "; ".join(result["discrepancies"])))
-            continue
-        try:
-            import_task(scratch, task_id, tasks_dir / task_id, decision=decision)
-        except (ValueError, sqlite3.Error) as error:
-            buckets["unresolved"].append((task_id, str(error)))
-            continue
-        buckets["resolved" if decision is not None else "clean"].append(task_id)
-
-
-def import_task(conn: sqlite3.Connection, task_id: str, task_dir: Path,
-                 *, decision: "MigrationDecision | None" = None, force: bool = False) -> dict:
-    """Actually import one task's file state into SQLite. Non-destructive:
-    source files are never modified or deleted.
-
-    Canonical-state guarantee: the status and current_phase actually
-    written are ALWAYS validated against the same VALID_STATUSES/
-    VALID_PHASES this module enforces everywhere else, with no exception.
-    A legacy value that isn't already canonical can only become canonical
-    by way of an explicit, audited `decision` (see MigrationDecision) --
-    never by force=True alone. force=True governs only proceeding past
-    OTHER discrepancies reconcile_task() may find (step-sequence gaps,
-    etc.) that a `decision` doesn't address; it can never cause a
-    non-canonical status/phase/verdict to be written.
-
-    decision.exclude=True raises MigrationExcluded unconditionally --
-    exclusion is absolute, not a discrepancy to force past.
-
-    Refuses (raises InvalidTransition) if reconcile_task() found
-    discrepancies that neither `decision` nor `force` resolve.
-
-    Migration machinery: `relay recover` calls it, and tests exercise it
-    against fixture corpora.
-    """
-    if decision is not None and decision.task_id != task_id:
-        raise ValueError(
-            f"decision.task_id ('{decision.task_id}') does not match task_id ('{task_id}')"
-        )
-    if decision is not None and decision.exclude:
-        raise MigrationExcluded(f"'{task_id}' is explicitly excluded from migration: {decision.note}")
-
-    if task_exists(conn, task_id):
-        raise ValueError(f"task '{task_id}' already exists in the database")
-
-    file_state = read_file_state(task_dir)
-    result = reconcile_task(task_id, file_state)
-    if not result["ok"] and not force:
-        if decision is None:
-            raise InvalidTransition(
-                f"refusing to import '{task_id}': discrepancies found: {result['discrepancies']}"
-            )
-        unaddressed = _discrepancies_left_after_decision(task_id, file_state, decision)
-        if unaddressed:
-            raise InvalidTransition(
-                f"refusing to import '{task_id}': the decision does not address: {unaddressed}"
-            )
-
-    run_yaml = file_state["run_yaml"]
-    has_run_yaml = (task_dir / "run.yaml").exists()
-    if not has_run_yaml and (decision is None or not decision.status or not decision.current_phase):
-        raise InvalidTransition(
-            f"cannot import '{task_id}': it has no run.yaml, so its status and current_phase "
-            f"must come from an explicit migration decision"
-        )
-
-    step_artifacts, note_artifacts = _split_note_files(task_id, file_state["artifacts"], decision)
-    _require_importable_steps(task_id, step_artifacts, decision, run_yaml=file_state["run_yaml"],
-                              force=force)
-    _require_overrides_apply(task_id, step_artifacts, decision)
-    task_created, task_updated = _task_timestamps(task_id, run_yaml, file_state["artifacts"])
-
-    ry_status = run_yaml.get("status", "in_progress")
-    ry_phase = run_yaml.get("current_phase")
-
-    final_status = decision.status if (decision is not None and decision.status) else ry_status
-    final_phase = decision.current_phase if (decision is not None and decision.current_phase) else ry_phase
-
-    # Whatever is about to be written (the legacy value or a decision's
-    # replacement) must already be canonical. There is no fallback
-    # substitution: an uncorrected non-canonical value fails at import
-    # time, with a message naming exactly what's missing, instead of
-    # writing bad data that only crashes a later `relay next` (a status of
-    # 'complete', say).
-    if final_status not in _valid_statuses:
-        raise InvalidTransition(
-            f"cannot import '{task_id}': status '{final_status}' is not canonical "
-            f"(legacy value '{ry_status}' has no migration decision mapping it to one of "
-            f"{_valid_statuses})"
-        )
-    if final_phase not in _valid_phases and final_phase != "done":
-        raise InvalidTransition(
-            f"cannot import '{task_id}': current_phase '{final_phase}' is not canonical "
-            f"(legacy value '{ry_phase}' has no migration decision mapping it to one of "
-            f"{_valid_phases + ['done']})"
-        )
-
-    # Step verdicts get the same treatment, as record_step_and_save() (the
-    # live path) gives them. A task with an invalid step verdict and no decision
-    # addressing it fails here, before anything is written, rather than
-    # corrupting canonical state -- and a decision only ever applies when
-    # its expected_verdict matches exactly what's actually on disk, so a
-    # decision that's gone stale (the file changed since it was authored)
-    # fails loudly instead of silently mis-applying.
-    final_verdicts: dict[int, str | None] = {}
-    step_overrides_applied: list[tuple[int, str, str]] = []  # (step, legacy, canonical)
-    for art in step_artifacts:
-        v = art.get("verdict")
-        p = art["phase"]
-        step = art["step"]
-        if not v or v in _valid_verdicts.get(p, []):
-            final_verdicts[step] = v
-            continue
-
-        override = decision.step_override_for(step) if decision is not None else None
-        if override is None:
-            raise InvalidTransition(
-                f"cannot import '{task_id}': step {step} ({art['filename']}) verdict "
-                f"'{v}' is not valid for phase '{p}'"
-            )
-        if override.expected_verdict != v:
-            raise InvalidTransition(
-                f"cannot import '{task_id}': step {step} override expected verdict "
-                f"'{override.expected_verdict}' but found '{v}' in {art['filename']} -- "
-                f"refusing to apply a decision against data it doesn't match"
-            )
-        if override.canonical_verdict not in _valid_verdicts.get(p, []):
-            raise InvalidTransition(
-                f"cannot import '{task_id}': step {step} override's canonical_verdict "
-                f"'{override.canonical_verdict}' is not valid for phase '{p}'"
-            )
-        final_verdicts[step] = override.canonical_verdict
-        step_overrides_applied.append((step, v, override.canonical_verdict))
-
-    # Per-step timestamps: prefer run.yaml's own history entries (they carry
-    # a real, fine-grained timestamp per phase transition) over the task's
-    # single overall `updated` value, which the pre-fix code stamped onto
-    # every step, destroying chronology. Where a step's real timestamp is
-    # genuinely unrecoverable (no matching history entry, no artifact `date`
-    # frontmatter either), created_at is left NULL -- not fabricated.
-    step_timestamps: dict[int, str] = {}
-    for entry in run_yaml.get("history", []) or []:
-        if not isinstance(entry, dict):
-            continue
-        step = entry.get("step")
-        ts = _timestamp_text(entry.get("timestamp"))
-        if step is not None and ts:
-            step_timestamps[step] = ts  # last entry for a duplicated step wins
-
-    # Task-row creation and every other write this import performs (the
-    # UPDATE, steps, migration_override events, historical events,
-    # nonstandard-field event) happen in ONE transaction via
-    # _insert_task_row(), not by calling the self-committing create_task().
-    # Committing the task row on its own would let a failure further down
-    # leave an orphaned tasks row with no steps or events, and
-    # task_exists() would then refuse every retry. With a single
-    # transaction any failure rolls back the task-row insert too, so a
-    # retry of import_task() after a failure needs no manual cleanup.
-    with conn:
-        _insert_task_row(conn, task_id, repo=run_yaml.get("repo"),
-                          deploy_intent=bool(run_yaml.get("deploy_intent", False)),
-                          current_phase=final_phase)
-        conn.execute(
-            """UPDATE tasks SET created=?, updated=?, status=?, current_phase=?,
-                   worktree_path=?, branch=?, base=?, next_step=? WHERE task_id=?""",
-            (task_created, task_updated,
-             final_status, final_phase,
-             run_yaml.get("worktree_path"), run_yaml.get("branch"), run_yaml.get("base"),
-             run_yaml.get("next_step") or _next_step_from_trail(step_artifacts, decision), task_id),
-        )
-        for art in step_artifacts:
-            created_at = step_timestamps.get(art["step"])
-            if created_at is None and art.get("date"):
-                created_at = f"{art['date']}T00:00:00Z"  # day-only, real, lower fidelity
-            conn.execute(
-                """INSERT INTO steps
-                       (task_id, step, phase, verdict, artifact_filename, content_hash, created_at)
-                   VALUES (?,?,?,?,?,?,?)""",
-                (task_id, art["step"], art["phase"], final_verdicts.get(art["step"]),
-                 art["filename"], art["content_hash"], created_at),
-            )
-
-        if not has_run_yaml:
-            conn.execute(
-                "INSERT INTO events (task_id, event_type, payload, timestamp) VALUES (?,?,?,?)",
-                (task_id, EVENT_HISTORICAL_NOTE,
-                 json.dumps({"source": "no run.yaml on disk; status and current_phase supplied "
-                                       "by migration decision", "note": decision.note}),
-                 _now()),
-            )
-        for note_artifact in note_artifacts:
-            conn.execute(
-                "INSERT INTO events (task_id, event_type, step, payload, timestamp) VALUES (?,?,?,?,?)",
-                (task_id, EVENT_HISTORICAL_NOTE, note_artifact["step"],
-                 json.dumps({"note_file": note_artifact["filename"],
-                             "content_hash": note_artifact["content_hash"],
-                             "note": decision.note}),
-                 _now()),
-            )
-        for missing_step in (decision.missing_steps if decision is not None else ()):
-            conn.execute(
-                "INSERT INTO events (task_id, event_type, step, payload, timestamp) VALUES (?,?,?,?,?)",
-                (task_id, EVENT_STEP_NEVER_DELIVERED, missing_step,
-                 json.dumps({"note": decision.note}), _now()),
-            )
-
-        for step, legacy_verdict, canonical_verdict in step_overrides_applied:
-            override = decision.step_override_for(step)
-            conn.execute(
-                "INSERT INTO events (task_id, event_type, step, payload, timestamp) VALUES (?,?,?,?,?)",
-                (task_id, EVENT_MIGRATION_OVERRIDE, step,
-                 json.dumps({"field": "verdict", "legacy": legacy_verdict,
-                             "canonical": canonical_verdict, "note": override.note}),
-                 _now()),
-            )
-
-        # Audit trail: record exactly what was overridden and why, distinct
-        # from ordinary state_saved/task_created events. Never fires when
-        # decision is None or doesn't touch a given field.
-        if decision is not None:
-            if decision.status:
-                conn.execute(
-                    "INSERT INTO events (task_id, event_type, payload, timestamp) VALUES (?,?,?,?)",
-                    (task_id, EVENT_MIGRATION_OVERRIDE,
-                     json.dumps({"field": "status", "legacy": ry_status,
-                                 "canonical": decision.status, "note": decision.note}),
-                     _now()),
-                )
-            if decision.current_phase:
-                conn.execute(
-                    "INSERT INTO events (task_id, event_type, payload, timestamp) VALUES (?,?,?,?)",
-                    (task_id, EVENT_MIGRATION_OVERRIDE,
-                     json.dumps({"field": "current_phase", "legacy": ry_phase,
-                                 "canonical": decision.current_phase, "note": decision.note}),
-                     _now()),
-                )
-
-        _import_historical_events(conn, task_id, run_yaml, step_artifacts)
-        _import_nonstandard_fields(conn, task_id, run_yaml)
-
-    return result
-
-
-# Python: dict(x) makes a shallow copy, so changing the copy below doesn't
-#   change the caller's data.
-def _discrepancies_left_after_decision(task_id: str, file_state: dict,
-                                       decision: "MigrationDecision") -> list[str]:
-    """Reconcile the task as it would look with the decision applied, so a
-    decision only excuses the problems it actually addresses.
-
-    Step gaps and duplicates are checked separately by
-    _require_importable_steps(). A run.yaml phase that disagrees with the
-    latest artifact counts as addressed only when the decision sets
-    current_phase explicitly, which import_task() records as an audited
-    migration_override event."""
-    adjusted_run_yaml = dict(file_state["run_yaml"])
-    if decision.status:
-        adjusted_run_yaml["status"] = decision.status
-    if decision.current_phase:
-        adjusted_run_yaml["current_phase"] = decision.current_phase
-
-    adjusted_artifacts = []
-    for artifact in file_state["artifacts"]:
-        if artifact["filename"] in decision.note_files:
-            continue
-        adjusted = dict(artifact)
-        override = decision.step_override_for(artifact["step"])
-        if override is not None:
-            if override.expected_verdict != artifact["verdict"]:
-                raise InvalidTransition(
-                    f"cannot import '{task_id}': step {artifact['step']} override expected verdict "
-                    f"'{override.expected_verdict}' but found '{artifact['verdict']}' in "
-                    f"{artifact['filename']} -- refusing to apply a decision against data it "
-                    f"doesn't match"
-                )
-            adjusted["verdict"] = override.canonical_verdict
-        adjusted_artifacts.append(adjusted)
-
-    return reconcile_task(
-        task_id, {"run_yaml": adjusted_run_yaml, "artifacts": adjusted_artifacts},
-        check_step_sequence=False,
-        check_phase_agreement=decision.current_phase is None,
-    )["discrepancies"]
-
-
-def _split_note_files(task_id: str, artifacts: list[dict],
-                      decision: "MigrationDecision | None") -> tuple[list[dict], list[dict]]:
-    """Separate the artifacts a decision names as notes from the real
-    pipeline steps. A named file that isn't on disk fails loudly: the
-    decision was written against different data."""
-    # Python: A 'conditional expression': A if condition else B, in one line.
-    #   Sets give fast membership checks and set math like a - b below.
-    note_filenames = set(decision.note_files) if decision is not None else set()
-    present = {artifact["filename"] for artifact in artifacts}
-    unknown = sorted(note_filenames - present)
-    if unknown:
-        raise InvalidTransition(
-            f"cannot import '{task_id}': note_files {unknown} are not agent artifacts on disk"
-        )
-    step_artifacts = [a for a in artifacts if a["filename"] not in note_filenames]
-    note_artifacts = [a for a in artifacts if a["filename"] in note_filenames]
-    return step_artifacts, note_artifacts
-
-
-def _require_importable_steps(task_id: str, step_artifacts: list[dict],
-                              decision: "MigrationDecision | None", *, run_yaml: dict,
-                              force: bool) -> None:
-    """Refuse anything that would make import invent or silently drop
-    history: a step with no phase, two files sharing a step number, a
-    declared-missing step that actually exists or has no evidence, or an
-    unexplained gap. force skips only the gap check."""
-    for artifact in step_artifacts:
-        if artifact["phase"] is None:
-            raise InvalidTransition(
-                f"cannot import '{task_id}': {artifact['filename']} has no frontmatter phase; "
-                f"list it in the decision's note_files to import it as a note"
-            )
-
-    step_numbers = [a["step"] for a in step_artifacts]
-    # Python: {... for ... if ...} is a set comprehension: build a set from a loop
-    #   in one expression. Using a set drops repeats automatically.
-    duplicates = sorted({n for n in step_numbers if step_numbers.count(n) > 1})
-    if duplicates:
-        raise InvalidTransition(
-            f"cannot import '{task_id}': step numbers {duplicates} are used by more than one "
-            f"artifact; list the extra files in the decision's note_files"
-        )
-
-    missing_steps = set(decision.missing_steps) if decision is not None else set()
-    contradicted = sorted(missing_steps & set(step_numbers))
-    if contradicted:
-        raise InvalidTransition(
-            f"cannot import '{task_id}': missing_steps {contradicted} actually exist on disk"
-        )
-    if missing_steps and step_numbers:
-        before_first = sorted(n for n in missing_steps if n < min(step_numbers))
-        if before_first:
-            raise InvalidTransition(
-                f"cannot import '{task_id}': missing_steps {before_first} come before the "
-                f"first artifact (step {min(step_numbers)})"
-            )
-        history_steps = {entry.get("step") for entry in run_yaml.get("history", []) or []
-                         if isinstance(entry, dict)}
-        unevidenced = sorted(n for n in missing_steps
-                             if n > max(step_numbers) and n not in history_steps)
-        if unevidenced:
-            raise InvalidTransition(
-                f"cannot import '{task_id}': missing_steps {unevidenced} come after the last "
-                f"artifact and run.yaml history has no record of them"
-            )
-
-    if force or not step_numbers:
-        return
-    accounted_for = sorted(set(step_numbers) | missing_steps)
-    expected = list(range(accounted_for[0], accounted_for[-1] + 1))
-    if accounted_for != expected:
-        gaps = sorted(set(expected) - set(accounted_for))
-        raise InvalidTransition(
-            f"cannot import '{task_id}': steps {gaps} are missing; declare them in the "
-            f"decision's missing_steps if they were never delivered"
-        )
-
-
-# Python: max(..., default=0) returns 0 for an empty list instead of raising.
-def _next_step_from_trail(step_artifacts: list[dict], decision: "MigrationDecision | None") -> int:
-    """One past the highest step on disk or declared missing."""
-    numbers = [artifact["step"] for artifact in step_artifacts]
-    numbers += list(decision.missing_steps) if decision is not None else []
-    return max(numbers, default=0) + 1
-
-
-def _require_overrides_apply(task_id: str, step_artifacts: list[dict],
-                             decision: "MigrationDecision | None") -> None:
-    """Every step override must hit a real step whose current verdict is the
-    one it expects and is not already canonical. A stale or pointless
-    override means the decision was written against different data."""
-    if decision is None:
-        return
-    artifacts_by_step = {artifact["step"]: artifact for artifact in step_artifacts}
-    for override in decision.step_overrides:
-        artifact = artifacts_by_step.get(override.step)
-        if artifact is None:
-            raise InvalidTransition(
-                f"cannot import '{task_id}': step override for step {override.step} "
-                f"matches no step on disk"
-            )
-        if artifact["verdict"] != override.expected_verdict:
-            raise InvalidTransition(
-                f"cannot import '{task_id}': step {override.step} override expected verdict "
-                f"'{override.expected_verdict}' but found '{artifact['verdict']}' in "
-                f"{artifact['filename']} -- refusing to apply a decision against data it "
-                f"doesn't match"
-            )
-        if artifact["verdict"] in _valid_verdicts.get(artifact["phase"], []):
-            raise InvalidTransition(
-                f"cannot import '{task_id}': step {override.step} verdict "
-                f"'{artifact['verdict']}' is already canonical; the override is stale"
-            )
-
-
-def _task_timestamps(task_id: str, run_yaml: dict, artifacts: list[dict]) -> tuple[str, str]:
-    """created/updated for the task row: run.yaml's own values when present,
-    otherwise the earliest and latest real artifact dates. Never invented:
-    no dates anywhere means the import is refused."""
-    if run_yaml.get("created") and run_yaml.get("updated"):
-        return _timestamp_text(run_yaml["created"]), _timestamp_text(run_yaml["updated"])
-    dates = sorted(str(a["date"]) for a in artifacts if a.get("date"))
-    if not dates:
-        raise InvalidTransition(
-            f"cannot import '{task_id}': no run.yaml timestamps and no artifact dates to "
-            f"derive created/updated from"
-        )
-    return (_timestamp_text(run_yaml.get("created")) or f"{dates[0]}T00:00:00Z",
-            _timestamp_text(run_yaml.get("updated")) or f"{dates[-1]}T00:00:00Z")
-
-
-# Python: 'str | None' in a hint means 'a string, or None'.
-def _timestamp_text(value) -> str | None:
-    """YAML turns an unquoted timestamp into a datetime (or a date); store
-    it in the same ISO-8601 'Z' form _now() writes, so every timestamp
-    compares and sorts the same way."""
-    if value is None or isinstance(value, str):
-        return value
-    if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            value = value.astimezone(timezone.utc).replace(tzinfo=None)
-        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(value, date):
-        return f"{value.isoformat()}T00:00:00Z"
-    return str(value)
-
-
-# Python: json.dumps(..., default=fn) calls fn for any value it can't serialize
-#   on its own (like dates). Raising TypeError there keeps the normal error.
-def _legacy_json_value(value):
-    """json.dumps fallback for values YAML parsed out of legacy files:
-    dates and datetimes become timestamp text instead of crashing."""
-    if isinstance(value, (datetime, date)):
-        return _timestamp_text(value)
-    raise TypeError(f"cannot store {type(value).__name__} from a legacy file as JSON")
-
-
-# run.yaml keys import_task()/create_task() actually read into canonical
-# columns. Anything else is non-standard, task-specific bookkeeping a human
-# or tool added directly to the file (calibration results, scope notes,
-# parked-reason text, base-branch provenance, etc.) -- real information,
-# never canonical Relay state.
-_CANONICAL_RUN_YAML_KEYS = frozenset({
-    "task_id", "created", "updated", "status", "current_phase", "next_step",
-    "schema_version", "repo", "worktree_path", "branch", "base",
-    "deploy_intent", "retries", "history",
-})
-
-
-def _import_nonstandard_fields(conn: sqlite3.Connection, task_id: str, run_yaml: dict) -> None:
-    """Preserve any run.yaml top-level fields outside the canonical schema
-    (e.g. a freeform `results:` block of notes) as one historical-metadata
-    event. Never touches tasks/steps.
-    No new schema field -- events.payload already exists for exactly this.
-    """
-    extra = {k: v for k, v in run_yaml.items() if k not in _CANONICAL_RUN_YAML_KEYS}
-    if not extra:
-        return
-    conn.execute(
-        "INSERT INTO events (task_id, event_type, payload, timestamp) VALUES (?,?,?,?)",
-        (task_id, EVENT_HISTORICAL_NOTE, json.dumps(extra, default=_legacy_json_value), _now()),
-    )
-
-
-def _import_historical_events(conn: sqlite3.Connection, task_id: str, run_yaml: dict,
-                               artifacts: list[dict]) -> None:
-    """Preserve run.yaml's history[] entries as pure historical record --
-    events rows, never canonical tasks/steps columns.
-
-    This is specifically for entries that use non-canonical phase
-    vocabulary Relay itself never had (human_gate, builder_fix,
-    builder_commit, builder_harden, committed, closeout -- observed in the
-    real corpus) or that simply have no corresponding artifact file. It
-    also captures real data those entries carry that canonical state has
-    nowhere else to hold, most notably git commit hashes on `committed`/
-    `builder_commit` entries. Relay itself never reads this table's
-    `payload` to make a routing decision -- it exists purely so "what
-    happened to this task" stays a query instead of a forensic file read,
-    per the persistence-v2 brief's own Problem Statement. Historical
-    vocabulary never touches VALID_PHASES, never becomes a `steps.phase`
-    or `tasks.current_phase` value.
-    """
-    imported_steps = {a["step"] for a in artifacts}
-    for entry in run_yaml.get("history", []) or []:
-        if not isinstance(entry, dict):
-            continue
-        step = entry.get("step")
-        phase = entry.get("phase")
-        # An entry backed by a real artifact is already faithfully
-        # represented in `steps` -- only record the ones that aren't,
-        # so this doesn't duplicate the normal step trail.
-        if step is not None and step in imported_steps and phase in _valid_phases:
-            continue
-        conn.execute(
-            "INSERT INTO events (task_id, event_type, phase, step, payload, timestamp) VALUES (?,?,?,?,?,?)",
-            (task_id, EVENT_HISTORICAL_NOTE, phase, step,
-             json.dumps(entry, default=_legacy_json_value),
-             _timestamp_text(entry.get("timestamp")) or _now()),
-        )

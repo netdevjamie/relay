@@ -4,7 +4,6 @@ such role lacks Edit, and a PreToolUse hook lets its Write reach only its
 own report under Relay's tasks folder, or a temporary folder."""
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -13,7 +12,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 HOOK = REPO / "hooks" / "only-write-reports.sh"
-READ_ONLY_ROLES = ("designer", "architect", "reviewer", "security", "ops")
+READ_ONLY_ROLES = ("designer", "architect", "reviewer", "security", "ops", "arbiter")
 HOOK_COMMAND = '"${RELAY_HOME:-$HOME/Projects/.relay}/hooks/only-write-reports.sh" || exit 2'
 
 
@@ -50,15 +49,6 @@ def guard(relay_home: Path, payload: str, tmpdir: Path) -> subprocess.CompletedP
                           env=env)
 
 
-def skip_if_under_tmp(tmp_path: Path) -> None:
-    """The guard lets any write under /tmp through, as scratch. On Linux
-    pytest's own folders are under /tmp, so a refusal can't be shown there;
-    CI runs pytest with --basetemp outside /tmp for that reason."""
-    tmp = os.path.realpath("/tmp")
-    if os.path.commonpath([tmp, os.path.realpath(tmp_path)]) == tmp:
-        pytest.skip("pytest's temporary folder is under /tmp; run with --basetemp outside it")
-
-
 def write_to(path) -> str:
     return json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(path), "content": "x"}})
 
@@ -82,14 +72,12 @@ def test_the_guard_lets_a_role_write_a_scratch_file(home, tmp_path):
 @pytest.mark.parametrize("where", ["repo/src/app.py", "relay-home/registry.yaml",
                                    "relay-home/tasks/../registry.yaml", "relay-home/tasks"])
 def test_the_guard_refuses_every_other_write(home, tmp_path, where):
-    skip_if_under_tmp(tmp_path)
     result = guard(home, write_to(tmp_path / where), tmp_path / "scratch")
     assert result.returncode == 2
     assert "read-only" in result.stderr
 
 
 def test_the_guard_refuses_a_write_through_a_link_out_of_the_tasks_folder(home, tmp_path):
-    skip_if_under_tmp(tmp_path)
     (tmp_path / "repo").mkdir()
     (home / "tasks" / "t1" / "escape").symlink_to(tmp_path / "repo")
     result = guard(home, write_to(home / "tasks" / "t1" / "escape" / "app.py"), tmp_path / "scratch")

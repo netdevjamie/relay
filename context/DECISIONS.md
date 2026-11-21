@@ -19,6 +19,12 @@ To change one, add the new decision and say which one it replaces.
   itself into each one.
 - **Python, standard library first.** The engine is Python with few
   dependencies and no build step.
+- **The ledger knows its own version.** It records it in SQLite's
+  `user_version`, backs itself up beside itself before an upgrade, and
+  refuses a ledger from a newer Relay. New facts are rows in the existing
+  `events` table where they can be, so an older Relay passes over them.
+- **One install layout.** The older per-project `.workflow/` mode is
+  removed; every install is the central one `setup.sh` makes.
 - **Lean on Claude Code instead of rebuilding it.** Claude Code makes
   worktrees, runs sessions side by side, runs hooks around tools, keeps
   session state and gives phone access through Remote Control. Relay does
@@ -29,9 +35,11 @@ To change one, add the new decision and say which one it replaces.
 
 ## Roles
 
-- **Seven roles: Designer, Architect, Builder, Reviewer, Tester, Security,
-  Ops.** Designer decides what and why; Architect decides how. Penetration
-  testing is part of Security. Ops runs only on tasks that deploy.
+- **Eight roles: Designer, Architect, Builder, Reviewer, Tester, Security,
+  Ops and the Arbiter.** Designer decides what and why; Architect decides
+  how. Penetration testing is part of Security. Ops runs only on tasks that
+  deploy. The Arbiter is read-only and runs only when a warning verdict or
+  a long review loop calls it.
 - **Each role prompt stands alone.** No shared house-rules file; the few
   lines every role shares are kept identical by a test.
 - **Read-only roles are held read-only by Claude Code, not by words alone.**
@@ -39,6 +47,18 @@ To change one, add the new decision and say which one it replaces.
   before every write, so a write reaches only the role's own report or a
   temporary folder. They keep Bash, so the shell is held by the prompt; this
   is listed in `docs/known-limits.md`.
+- **Under `--auto`, the call names everything.** Each role's `claude
+  --print` call names its permission mode (`bypassPermissions` by default,
+  because a prompt under `--print` cannot be answered), and its model,
+  effort and time limit come from Relay's own config, never from a repo
+  profile, so a task branch cannot change how its own roles run. A role
+  past its time limit (two hours by default) is stopped with its whole
+  process group and the task stops for the owner; nothing it left is routed
+  on.
+- **Each role gets a reading list, not the whole folder.** Required: the
+  brief, the latest report of each role that has run and the report the
+  round answers. Everything else in the task folder is optional history.
+  The Arbiter, which judges the whole loop, gets every report in order.
 - **Role prompt size is held by a word ceiling and a line length**, not a
   line count. A line cap was gamed by packing rules into existing lines.
   Raising a ceiling is allowed when every new word earns its place.
@@ -60,13 +80,25 @@ To change one, add the new decision and say which one it replaces.
   unreadable field gives the full chain. The brief template defaults to
   `risky: yes`. Work that is not risky stops for the owner when Relay could
   run no tests, since no Tester will.
-- **Sizing is recorded once.** `relay start` writes a `sized` event and
-  routing reads that, so a brief edited mid-run (by a role, say) changes
-  nothing.
-- **Fix rounds end by consequence, with a tripwire.** A loop ends when the
-  latest reports hold no high finding. After 2 fix rounds that still find a
-  high, Relay stops and the owner decides. Without a cap, rounds chased
-  ever smaller findings.
+- **Sizing is recorded, and only grows on its own.** `relay start` writes
+  a `sized` event and routing reads that, so a brief edited mid-run (by a
+  role, say) changes nothing. After each Builder round Relay works out a
+  hint from the changed paths' names (seven risk categories, defaults plus
+  the base profile's `risk_paths`). The hint never routes by itself: the
+  Reviewer judges the diff and may raise the sizing, and on a `risky: no`
+  task whose hint matched it must answer raise or keep. The Arbiter may
+  raise it too. A raise is a further `sized` event and takes effect at once.
+  Only the owner lowers a sizing, with `relay resize` and a reason.
+- **Loops end by consequence, and the Arbiter decides a long one.** A loop
+  ends when the latest reports hold no high finding. Once 2 review loops
+  have run on the current plan and a report still holds a high, the Arbiter
+  reads the whole loop with fresh eyes and rules move on, a targeted round,
+  a re-plan or escalate. Relay reads the ruling only from the report's
+  frontmatter. Code fences it: a move on stops for the owner while Security
+  holds a high or Relay's latest test run did not pass, and before it would
+  close the task or reach Ops; a second re-plan stops for the owner; a
+  ruling Relay cannot act on stops and moves nothing. Without a limit,
+  rounds chased ever smaller findings.
 - **The retry limit counts only rounds nobody chose.** Loops Relay routes on
   its own count toward `max_retries` (default 3). A round the owner chose
   with `relay send-back` or `relay override` is never counted or refused.
@@ -74,11 +106,12 @@ To change one, add the new decision and say which one it replaces.
   override` moves it, or `relay send-back` when the retry limit stopped it,
   and `relay abort` closes it. In the read API a blocked
   task never reads as `ready`.
-- **A pass with something still wrong always stops for the owner**
-  (`approved_with_warnings`, `pass_with_concerns`, `findings`), even when no
-  later phase follows. The recommended answer is to send it back; accepting
-  is the exception. A send-back is recorded as its own event, never as an
-  approval.
+- **A pass with something still wrong goes to the Arbiter**
+  (`approved_with_warnings`, `pass_with_concerns`, `findings`), at any
+  round, under the same fences. The owner decides a medium only when the
+  Arbiter escalates. Findings the Arbiter accepts are recorded in the
+  ledger and handed to every later role; Relay writes nothing into the
+  repo. A send-back is recorded as its own event, never as an approval.
 
 ## Evidence
 
@@ -90,9 +123,25 @@ To change one, add the new decision and say which one it replaces.
 - **Tests must be able to fail.** A test added for a fix must fail on the
   code before the fix; the Builder commits it alone first, and may not drop
   tests or add skips.
-- **A changed test command needs the owner.** The command is read from the
-  base branch's profile too; when the task branch changes it, the owner
-  confirms before the run counts.
+- **A changed harness needs the owner.** The command is read from the
+  base branch's profile too. When the task branch changes it, or a file the
+  tests run on (the files the command names, common test runner config, the
+  base profile's `test_harness` list), or fewer tests run than at the base
+  or the previous run, the owner confirms before a passing run counts.
+- **Zero tests is not a pass.** Exit 0 with no tests run, or with no
+  readable report where the profile names one, is a failed run.
+- **Relay shows which new tests fail at the base.** A branch's added or
+  changed test files are run over the base's code and each case recorded
+  ("seen to fail"). It is shown on the gate and never changes routing.
+- **Extra test runs never touch a checkout.** The base count, seen to fail
+  and the optional clean-checkout run happen in a throwaway clone under the
+  system temp folder, with hooks off, deleted afterwards.
+- **The base is a commit, not a name.** `relay start` confirms the base
+  (a remote-tracking base by asking the remote, a local branch exactly,
+  or a full commit id) and records the commit. Before every launch it is
+  confirmed again and only moves forward; a base that no longer contains it
+  stops the task. Every reader of the base takes that commit from one
+  module.
 - **One rating scale decides the verdict.** Reviewer, Tester and Security
   rate every finding high, medium or low by one definition, held identical
   across the three prompts by a test. High must be fixed before moving on;
@@ -114,7 +163,7 @@ To change one, add the new decision and say which one it replaces.
 - **Relay does not grade report prose.** Earlier versions checked that a
   report used the right headings and marks, and ran a separate auditor role
   every few fix rounds. Both were removed: checking words is a reviewer's
-  job, and the 2-round tripwire stops a loop more simply. Relay keeps what
+  job, and the Arbiter judges a loop more simply. Relay keeps what
   code can prove: its own test run, the verdict table and the gates. The
   role prompts say so: the marks on lows (`Fix now`, `Record`) and the
   report headings are for the owner and the next role, and Relay reads none

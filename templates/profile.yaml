@@ -24,6 +24,28 @@ commands:
 # the test counts from it after each run. Add the file to .gitignore.
 # test_report: test-results/junit.xml
 
+# Extra files that make up how the tests run, beyond the ones Relay already
+# watches (files the test command names, and common test runner config such
+# as conftest.py or jest.config.js). A task branch that changes one stops for
+# the owner before its passing run is believed. Read from the base branch.
+# test_harness:
+#   - scripts/test-env.sh
+#   - "*.testsettings"
+
+# Run the tests in a fresh checkout of the commit, with no ignored files
+# (node_modules, caches, .env) present (default false). The test command must
+# then install what it needs itself.
+# test_clean_checkout: true
+
+# Path patterns to add to the sizing hint's risk categories (auth, input,
+# payments, schema, production_data, secrets, deploy). After each Builder
+# round Relay lists the changed paths that match, and the Reviewer judges
+# whether the task's sizing still fits. Additions only: Relay's defaults
+# (see Relay's docs/profile.md) always apply. Read from the base branch.
+# risk_paths:
+#   auth:
+#     - "gatekeeper_*"
+
 # How many times the Tester reruns the suite to catch flaky tests (default 2).
 # flaky_check_runs: 2
 

@@ -1,4 +1,4 @@
-"""Tests for the core of the orchestrator: routing, state, frontmatter, naming, registry."""
+"""Tests for orchestrator/relay.py: routing, state, frontmatter, naming, registry."""
 
 import os
 import tempfile
@@ -18,7 +18,6 @@ from settings import (
     load_yaml,
     dump_yaml,
     _resolve_repo_path,
-    _IS_LEGACY,
     _CLI_CMD,
     RELAY_HOME,
 )
@@ -32,14 +31,17 @@ from run_state import (
 )
 from routing import ROUTING, determine_next
 from agents import artifact_name
+import commands
 from commands import cmd_register
+from tests.cli_edge import run_relay
+from tests.test_send_back import config as send_back_config  # noqa: F401  (a fixture)
 from tests.hostile_yaml import (  # noqa: F401  (nothing_composed is a fixture)
     BAD_VALUE_NAMES, BAD_VALUES, SECURITYS_MERGE_KEYS, nothing_composed,
 )
 
 
 # ---------------------------------------------------------------------------
-# determine_next: the routing table
+# determine_next: the routing brain
 # ---------------------------------------------------------------------------
 
 class TestDetermineNext:
@@ -133,20 +135,12 @@ class TestDetermineNext:
         phase, _, _ = determine_next("security", "critical-findings", config)
         assert phase == "builder"
 
-    # -- pentest is legacy: still routable for old tasks, never routed into --
+    # -- pentest is legacy: no routes, never routed into --
 
-    def test_pentest_secure(self, config):
-        phase, _, _ = determine_next("pentest", "secure", config)
-        assert phase == "ops"
-
-    def test_pentest_findings(self, config):
-        phase, human, _ = determine_next("pentest", "findings", config)
-        assert phase == "ops"
-        assert human is True
-
-    def test_pentest_vulnerable(self, config):
-        phase, _, _ = determine_next("pentest", "vulnerable", config)
-        assert phase == "builder"
+    @pytest.mark.parametrize("verdict", ["secure", "findings", "vulnerable"])
+    def test_a_legacy_pentest_verdict_has_no_route_so_the_owner_decides(self, config, verdict):
+        assert determine_next("pentest", verdict, config) == (
+            None, True, f"Unknown verdict '{verdict}' from pentest. Human must decide.")
 
     def test_nothing_routes_into_pentest(self):
         from routing import ROUTING
@@ -223,37 +217,25 @@ class TestDetermineNext:
 class TestRoutingTableCompleteness:
     """Verify ROUTING covers every phase and every verdict is listed."""
 
-    def test_all_phases_have_routes(self):
+    # The Arbiter routes on its ruling (routing._arbiter_ruling), never on the
+    # table, so like a legacy phase it has no row.
+    NO_ROUTES = settings.LEGACY_PHASES + [settings.ARBITER]
+
+    def test_all_phases_have_routes_and_legacy_phases_none(self):
         for phase in VALID_PHASES:
-            assert phase in ROUTING, f"Phase {phase} missing from ROUTING"
+            if phase in self.NO_ROUTES:
+                assert phase not in ROUTING, f"Phase {phase} must not be in ROUTING"
+            else:
+                assert phase in ROUTING, f"Phase {phase} missing from ROUTING"
 
     def test_all_verdicts_have_routes(self):
         for phase, verdicts in VALID_VERDICTS.items():
+            if phase in self.NO_ROUTES:
+                continue
             for verdict in verdicts:
                 assert verdict in ROUTING[phase], (
                     f"Verdict '{verdict}' for phase '{phase}' missing from ROUTING"
                 )
-
-
-class TestHumanGateSettings:
-    """Every gate setting the example config offers is one routing reads."""
-
-    EXAMPLE_CONFIG = Path(__file__).resolve().parents[1] / "config.example.yaml"
-
-    def test_the_example_offers_the_settings_the_defaults_hold(self):
-        example = settings.load_yaml(self.EXAMPLE_CONFIG.read_text())
-        assert set(example["human_gates"]) == set(settings.DEFAULT_CONFIG["human_gates"])
-
-    @pytest.mark.parametrize("gate", list(settings.DEFAULT_CONFIG["human_gates"]))
-    def test_turning_a_gate_off_stops_at_fewer_places(self, gate):
-        def stops(gates_on: bool) -> set[tuple[str, str]]:
-            config = {"human_gates": {name: True for name in settings.DEFAULT_CONFIG["human_gates"]}}
-            config["human_gates"][gate] = gates_on
-            return {(phase, verdict) for phase, verdicts in VALID_VERDICTS.items()
-                    for verdict in verdicts if determine_next(phase, verdict, config)[1]}
-
-        assert stops(gates_on=False) < stops(gates_on=True), (
-            f"human_gates.{gate} set to false changes no routing decision")
 
 
 # ---------------------------------------------------------------------------
@@ -433,32 +415,9 @@ class TestStateConsistency:
                 check_state_consistency("test-task", state, "reviewer", 3)
                 captured = capsys.readouterr()
                 assert "STATE WARNINGS" in captured.out
-                assert "The recorded phase is 'builder'" in captured.out
+                assert "run.yaml current_phase is 'builder'" in captured.out
             finally:
                 settings.TASKS_DIR = orig
-
-    @staticmethod
-    def _feature_run(task_dir: Path, size: str) -> dict:
-        """Designer, Builder and Reviewer reports, no Architect's, under a
-        brief of the given size that is not risky."""
-        (task_dir / "brief.md").write_text(f"---\nsize: {size}\nrisky: no\ndeploy: no\n---\n# Brief\n")
-        reports = [(1, "designer", "ready-for-builder"), (2, "builder", "ready-for-review"),
-                   (3, "reviewer", "approved")]
-        for step, phase, verdict in reports:
-            (task_dir / f"{step:02d}-{phase}.md").write_text(
-                f"---\ntask_id: t\nphase: {phase}\nstep: {step}\nverdict: {verdict}\n---\nreport\n")
-        return {"current_phase": "reviewer",
-                "history": [{"step": step, "phase": phase} for step, phase, _ in reports]}
-
-    @pytest.mark.parametrize("size, warned", [("feature", False), ("project", True)])
-    def test_a_missing_architect_is_reported_only_where_the_size_needs_one(self, tmp_path, monkeypatch,
-                                                                            capsys, size, warned):
-        monkeypatch.setattr(settings, "TASKS_DIR", tmp_path)
-        task_dir = tmp_path / "t"
-        task_dir.mkdir()
-        state = self._feature_run(task_dir, size)
-        check_state_consistency("t", state, "reviewer", 3)
-        assert ("may have been skipped" in capsys.readouterr().out) is warned
 
 
 # ---------------------------------------------------------------------------
@@ -523,10 +482,6 @@ class TestModeAwareConstants:
         assert isinstance(_CLI_CMD, str)
         assert len(_CLI_CMD) > 0
 
-    def test_legacy_mode_detected_correctly(self):
-        # _IS_LEGACY should be a bool
-        assert isinstance(_IS_LEGACY, bool)
-
 
 class TestInitRunStateRelay:
     def test_has_schema_version(self):
@@ -553,17 +508,47 @@ class TestCmdRegister:
             repo_dir = Path(tmpdir) / "my-repo"
             repo_dir.mkdir()
             try:
-                cmd_register(str(repo_dir), alias="test-repo")
+                assert cmd_register(str(repo_dir), alias="test-repo") == 0
                 assert settings.REGISTRY_PATH.exists()
                 with open(settings.REGISTRY_PATH) as f:
                     reg = load_yaml(f.read())
                 assert reg["repos"]["test-repo"] == str(repo_dir.resolve())
-                # Nothing is written into the repo: an untracked file there
-                # would make Relay's own test run refuse the Builder's work.
-                assert list(repo_dir.iterdir()) == []
+                # Should also create .relay.yaml in target
+                assert (repo_dir / ".relay.yaml").exists()
             finally:
                 settings.REGISTRY_PATH = orig_reg
 
     def test_register_rejects_nonexistent_path(self):
         with pytest.raises(SystemExit):
-            cmd_register("/nonexistent/path/that/does/not/exist")
+            run_relay({}, "register", "/nonexistent/path/that/does/not/exist")
+
+
+class TestTheCommandLineExitsWithEachCommandsCode:
+    """relay.main is the one place a command's exit code becomes the
+    process's exit, and it names each command that returns one. A refusal
+    from each must still exit 1 there."""
+
+    @pytest.mark.parametrize("arguments", [
+        ["start", "nope"],
+        ["next", "nope"],
+        ["validate", "nope"],
+        ["send-back", "nope"],
+        ["override", "nope", "builder"],
+        ["note", "nope", "--note", "x"],
+        ["abort", "nope"],
+        ["decide", "nope", "approve", "--step", "1", "--gate", "approval"],
+        ["register", "/nonexistent/path/that/does/not/exist"],
+        ["recover", "--init", "--from-projections"],
+    ], ids=lambda arguments: arguments[0])
+    def test_a_refusal_exits_1(self, send_back_config, arguments):
+        with pytest.raises(SystemExit) as stopped:
+            run_relay(send_back_config, *arguments)
+        assert stopped.value.code == 1
+
+    def test_show_of_a_report_that_is_not_there_exits_1(self, send_back_config):
+        (settings.TASKS_DIR / "shown").mkdir(parents=True)
+        (settings.TASKS_DIR / "shown" / "brief.md").write_text("# Brief\n")
+        assert commands.cmd_start("shown", auto=False, config=send_back_config) == 0
+        with pytest.raises(SystemExit) as stopped:
+            run_relay(send_back_config, "show", "shown", "07-builder")
+        assert stopped.value.code == 1

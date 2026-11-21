@@ -30,6 +30,26 @@ safe.
 When a role prompt in `~/.claude/agents` differs from Relay's, the first
 install keeps a copy beside it as `<name>.before-relay`.
 
+**The backend, new and upgraded.** A new install's `config.yaml` is a copy
+of `orchestrator/config.example.yaml`, which sets
+`persistence_backend: sqlite`, the ledger. An install whose `config.yaml`
+has no `persistence_backend` line, such as one copied from an older
+example, stays on the files backend after `./setup.sh`: Relay's own default
+is `files`, and `./setup.sh` never replaces the file. To move such an
+install, add `persistence_backend: sqlite` to its `config.yaml` (and run
+`relay recover --init` if there is no `relay.db`), then run
+`relay recover --from-projections` to see what importing its tasks would
+do, and the same with `--apply` to import the clean ones. A flagged task
+needs `--decisions FILE`.
+
+**The ledger's version.** The ledger records its own version in SQLite's
+`user_version`. The first command that opens it for writing after an
+upgrade that brings a newer ledger version (any command but the read-only
+ones: `relay status|list|gate-check --json`, `relay waiting`, `relay card`,
+`relay show`) copies it beside itself as
+`relay.db.backup-v{old version}-{UTC time}`, then upgrades it in one
+transaction. A ledger from a newer Relay is refused rather than read.
+
 Change Relay in this repository and install with `./setup.sh`. Never edit
 the files under `~/Projects/.relay` by hand: the next install overwrites
 them, and the checkout no longer describes what is running.
@@ -80,7 +100,7 @@ diff -rq agents ~/Projects/.relay/agents
 for module in orchestrator/*.py; do diff -q "$module" ~/Projects/.relay/orchestrator; done
 ```
 
-Expect no line for the seven role files or any Python file. An "Only in"
+Expect no line for the eight role files or any Python file. An "Only in"
 line for an agent that is not Relay's is fine.
 
 The smoke test is the one in Relay's own profile,
@@ -108,14 +128,14 @@ that holds your repos (the one you start Claude Code sessions in, such as
 `.claude/agents`:
 
 ```
-grep -rliE "^name:[[:space:]]*[\"']?(designer|architect|builder|reviewer|tester|security|ops)[\"']?[[:space:]]*$" "$WORKSPACE/.claude/agents"
+grep -rliE "^name:[[:space:]]*[\"']?(designer|architect|builder|reviewer|tester|security|ops|arbiter)[\"']?[[:space:]]*$" "$WORKSPACE/.claude/agents"
 ```
 
 The second covers every project-level folder under the workspace, because
 each repo and each worktree can hold its own:
 
 ```
-find "$WORKSPACE" -maxdepth 5 -type d -path '*/.claude/agents' -exec grep -rliE "^name:[[:space:]]*[\"']?(designer|architect|builder|reviewer|tester|security|ops)[\"']?[[:space:]]*$" {} +
+find "$WORKSPACE" -maxdepth 5 -type d -path '*/.claude/agents' -exec grep -rliE "^name:[[:space:]]*[\"']?(designer|architect|builder|reviewer|tester|security|ops|arbiter)[\"']?[[:space:]]*$" {} +
 ```
 
 Expect nothing from the first; "No such file or directory" also means
@@ -180,6 +200,15 @@ What the rollback does not put back or undo:
   backup has it.
 - Reports roles wrote under the newer prompts.
 - A change to the ledger schema. That needs its own plan.
+- A task whose history holds a step an older Relay does not know, such as
+  an Arbiter step under a version from before the Arbiter. Relay checks
+  every step of a task's history on every save, so the older version
+  refuses every save of that task, an abort included. Close such a task
+  before rolling back, or reinstall the newer version.
+- A repo profile that uses a key the older version does not know (such as
+  `test_harness`, `risk_paths` or `test_clean_checkout`). The older version
+  reads it as an error in the profile. Take such lines out before rolling
+  back.
 
 If the backup is lost, `./setup.sh` run from a checkout of the earlier
 version copies that version's files over the same places.

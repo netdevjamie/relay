@@ -28,7 +28,7 @@ _FINDING_NUMBER = re.compile(r"^[0-9]+$")
 _TITLE_LEVEL = 1
 _SECTION_END_LEVELS = (1, 2)
 
-# Loose patterns, used only to decide what the card may claim, never to
+# Loose patterns, used only to decide what the board may claim, never to
 # read anything. Each matches more than the strict reader accepts.
 # A line that begins with the words "rated findings", whatever markup,
 # spacing or letter case it is written with.
@@ -40,7 +40,7 @@ _RATED_ROW_LIKE = re.compile(r"(?<![0-9])[0-9]+\.?[\s*_`]*\|[\s*_`]*(?:high|medi
 
 
 def read_report(text: str) -> dict:
-    """Everything the card needs from one report. Never raises on odd
+    """Everything the board needs from one report. Never raises on odd
     text: what cannot be read is reported as missing, not guessed.
 
     A report quotes other people's text, and no rule about where a line
@@ -49,7 +49,7 @@ def read_report(text: str) -> dict:
     prompts put it. And it looks over the whole file loosely (frontmatter,
     code and quotes included) for anything else that could be the same
     thing; when it finds any, it says so (`summary_in_doubt`,
-    `findings_complete`, `says_none`) and the card claims less.
+    `findings_complete`, `says_none`) and the board claims less.
 
     `says_none` is the single line the prompts ask for and nothing else."""
     lines = markdown_blocks.lines_outside_code(text)

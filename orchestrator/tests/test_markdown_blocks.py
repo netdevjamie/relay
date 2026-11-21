@@ -123,7 +123,7 @@ class TestSpans:
 
 class TestMarkupStaysText:
     def test_markup_stays_text(self):
-        """A script tag, an image with a handler and a javascript link
+        """C26: a script tag, an image with a handler and a javascript link
         come through as the characters written, in plain text spans. No
         block or span kind exists that a page could turn into a link, an
         image or raw markup."""
@@ -233,8 +233,8 @@ class TestOneDefinitionOfALine:
 
     @pytest.mark.parametrize("inside", ["\u2028", "\u2029", "\x85", "\x0c", "\x0b", "\x1c", "\r"])
     def test_a_separator_inside_a_line_starts_no_block(self, inside):
-        """A Unicode line separator inside one written line does not begin
-        a new line, so quoted words never become a heading."""
+        """Seen before the fix: a Unicode line separator inside one written
+        line began a new line, so quoted words became a heading."""
         blocks = to_blocks(f"A note that reads `x{inside}## A heading{inside}| a | b |{inside}` here.\n")
         assert [block["kind"] for block in blocks] == ["paragraph"]
         assert markdown_blocks.lines_outside_code(f"a{inside}## A heading\n") == [f"a{inside}## A heading"]

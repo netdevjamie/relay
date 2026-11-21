@@ -15,10 +15,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import agents
+import arbiter
 import board_view
 import commands
 import db
@@ -27,6 +29,8 @@ import routing
 import run_state
 import settings
 from settings import DEFAULT_CONFIG
+from tests.arbiter_fixtures import ESCALATION, finish_arbiter, stand_at_the_gate
+from tests.cli_edge import run_relay
 from tests.test_send_back import (  # noqa: F401
     UP_TO_REVIEW, before_the_stop_card, config, events_of_type, finish_step, task_at,
 )
@@ -34,18 +38,29 @@ from tests.test_send_back import (  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def the_walks_here_were_written_for_five_fix_rounds(request, monkeypatch):
-    """The walks in this file test how the tripwire and the retry limit
-    work, with the tripwire set at five fix rounds so each walk has room.
-    The real number is two; TestTheOwnersNumber below tests it."""
+    """The walks in this file test how the count that calls the Arbiter and
+    the retry limit work, and were written when the tripwire stopped after
+    five fix rounds. The owner's number is two; TestTheOwnersNumber below
+    tests that number itself."""
     if request.cls is not TestTheOwnersNumber:
-        monkeypatch.setattr(routing, "FIX_ROUNDS_BEFORE_THE_OWNER_DECIDES", 5)
+        monkeypatch.setattr(arbiter, "REVIEW_LOOPS_BEFORE_THE_ARBITER", 5)
 
 NOON = datetime(2026, 10, 7, 12, 0, tzinfo=timezone(timedelta(hours=-4)))
 CLI = settings._CLI_CMD
 
 
 def next_(task_id: str, config: dict) -> None:
-    commands.cmd_next(task_id, auto=False, config=config)
+    assert commands.cmd_next(task_id, auto=False, config=config) == 0
+
+
+def next_from_the_command_line(task_id: str, config: dict) -> None:
+    """`relay next`, for a test that asserts how the command line exits."""
+    run_relay(config, "next", task_id)
+
+
+def send_back_from_the_command_line(task_id: str, config: dict) -> None:
+    """`relay send-back`, for a test that asserts how the command line exits."""
+    run_relay(config, "send-back", task_id)
 
 
 def reviewer_asks_for_changes(task_id: str, config: dict) -> None:
@@ -68,12 +83,22 @@ def automatic_rounds(task_id: str, config: dict, rounds: int) -> None:
         builder_finishes(task_id, config)
 
 
-def send_back_at_the_gate(task_id: str, config: dict, note: str | None = "Fix the warnings.") -> None:
-    """A chosen round: the Reviewer passes with warnings, Relay stops for
-    the owner, and the owner sends the work back."""
+def the_arbiter_asks_the_owner(task_id: str, config: dict) -> None:
+    """The Reviewer passes with warnings, the Arbiter is called, and it
+    escalates: the task stops for the owner at the Arbiter's step."""
     finish_step(task_id, config, "approved_with_warnings")
     next_(task_id, config)
-    commands.cmd_send_back(task_id, config, note=note)
+    finish_arbiter(task_id, config, "escalate")
+    next_(task_id, config)
+
+
+def send_back_at_the_gate(task_id: str, config: dict, note: str | None = "Fix the warnings.") -> None:
+    """A chosen round: the Arbiter asks the owner at a warnings verdict, and
+    the owner sends the work back. (Since the Arbiter, a warning verdict no
+    longer stops for the owner by itself; an escalation is where the owner
+    still sends finished work back.)"""
+    the_arbiter_asks_the_owner(task_id, config)
+    assert commands.cmd_send_back(task_id, config, note=note) == 0
 
 
 def count(task_id: str, config: dict, phase: str = "builder") -> int:
@@ -160,10 +185,10 @@ class TestTheCount:
     def test_override_resets_the_count_of_the_phase_it_moves_to(self, config):
         automatic_rounds("moved", config, 2)
         finish_step("moved", config, "approved")
-        commands.cmd_override("moved", "tester", config)
+        assert commands.cmd_override("moved", "tester", config) == 0
         assert count("moved", config) == 2  # an override elsewhere leaves the Builder's count
         finish_step("moved", config, "pass")
-        commands.cmd_override("moved", "builder", config)
+        assert commands.cmd_override("moved", "builder", config) == 0
         assert count("moved", config) == 0
         # The reset is the approval event itself: no retry event was added or needed.
         assert len(events_of_type("moved", db.EVENT_RETRY)) == 2
@@ -178,7 +203,7 @@ class TestTheCount:
         reviewer_asks_for_changes("decided", config)  # stopped: builder 3 of 3
         assert (state_of("decided", config), count("decided", config)) == (("blocked", "reviewer"), 3)
 
-        commands.cmd_override("decided", "tester", config)
+        assert commands.cmd_override("decided", "tester", config) == 0
         assert (state_of("decided", config), count("decided", config)) == (("in_progress", "tester"), 0)
         # The reset is the approval event: it names the stopped phase, and no retry event changed.
         assert [event["payload"] for event in events_of_type("decided", db.EVENT_APPROVAL)] == [
@@ -199,7 +224,7 @@ class TestTheCount:
         run_state.save_run_state("moved-on", state, files_config)
         assert state_of("moved-on", files_config) == ("blocked", "reviewer")
 
-        commands.cmd_override("moved-on", "tester", files_config)
+        assert commands.cmd_override("moved-on", "tester", files_config) == 0
         assert (state_of("moved-on", files_config), count("moved-on", files_config)) == (
             ("in_progress", "tester"), 0)
 
@@ -218,7 +243,7 @@ class TestTheCount:
     def test_a_decision_whose_phase_is_not_text_resets_nothing_and_raises_nothing(
             self, config, event_type, payload):
         """Only a hand-edited ledger can hold such a row. It must not break
-        status, the list or the card for that ledger."""
+        status, the list or the board for that ledger."""
         automatic_rounds("odd", config, 2)
         with settings.get_db_connection() as conn:
             conn.execute(
@@ -230,7 +255,7 @@ class TestTheCount:
 
     def test_a_payload_nested_too_deep_to_read_resets_nothing_and_raises_nothing(self, config):
         """Reading it raises RecursionError, which is not a ValueError. One
-        such row must not take the list and the card down for every task."""
+        such row must not take the list and the board down for every task."""
         automatic_rounds("deep", config, 2)
         automatic_rounds("other", config, 1)
         with settings.get_db_connection() as conn:
@@ -277,7 +302,8 @@ class TestTheLimit:
             f"    {CLI} override four <phase>                 (move it somewhere else)\n"
             f"    {CLI} abort four\n")
 
-        out = before_the_stop_card(refused(next_, "four", config, capsys), "four", config)
+        out = before_the_stop_card(refused(next_from_the_command_line, "four", config, capsys),
+                                   "four", config)
         assert out == (
             "Task four is stopped: builder has gone back for fixes 3 times in a row "
             "with nobody deciding (limit 3).\n"
@@ -307,7 +333,7 @@ class TestTheLimit:
             assert state_of("stopped", config) == ("blocked", "reviewer")
 
         capsys.readouterr()
-        commands.cmd_send_back("stopped", config, note="One more go at the null check.")
+        assert commands.cmd_send_back("stopped", config, note="One more go at the null check.") == 0
         out = capsys.readouterr().out
         assert "Sent back to builder. Automatic rounds: 0 of 1." in out
         assert "One more go at the null check." in out  # the Builder is given the note
@@ -327,7 +353,7 @@ class TestTheLimit:
         finish_step("brief-loop", config, "needs-designer")
         next_("brief-loop", config)
         assert state_of("brief-loop", config) == ("blocked", "architect")
-        commands.cmd_send_back("brief-loop", config, note="Drop the second screen.")
+        assert commands.cmd_send_back("brief-loop", config, note="Drop the second screen.") == 0
         assert state_of("brief-loop", config) == ("in_progress", "designer")
         assert events_of_type("brief-loop", db.EVENT_SENT_BACK)[0]["payload"]["to_phase"] == "designer"
 
@@ -341,38 +367,38 @@ class TestTheLedger:
         reviewer_asks_for_changes("label", config)   # automatic: the count is at the limit
         builder_finishes("label", config)
         reviewer_asks_for_changes("label", config)   # stopped by the limit
-        commands.cmd_send_back("label", config, note="From the limit stop.")
+        assert commands.cmd_send_back("label", config, note="From the limit stop.") == 0
         builder_finishes("label", config)
         send_back_at_the_gate("label", config, note=None)
 
+        # A gate send-back is now made at the Arbiter's escalation, so it is
+        # recorded from the Arbiter's step; the payload is as it was.
         sent_back = [(event["phase"], event["verdict"], event["payload"])
                      for event in events_of_type("label", db.EVENT_SENT_BACK)]
         assert sent_back == [
-            ("reviewer", "approved_with_warnings",
+            ("arbiter", "escalate",
              {"to_phase": "builder", "note": "At a gate, with a note."}),
             ("reviewer", "changes_requested",
              {"to_phase": "builder", "note": "From the limit stop."}),
-            ("reviewer", "approved_with_warnings", {"to_phase": "builder", "note": None}),
+            ("arbiter", "escalate", {"to_phase": "builder", "note": None}),
         ]
         assert events_of_type("label", db.EVENT_APPROVAL) == []
         assert read_api.status_payload("label", config)["approvals"] == []
 
     def test_a_send_back_with_no_note_resets_and_says_so(self, config, capsys):
         automatic_rounds("quiet", config, 1)
-        finish_step("quiet", config, "approved_with_warnings")
-        next_("quiet", config)
+        the_arbiter_asks_the_owner("quiet", config)
         capsys.readouterr()
-        commands.cmd_send_back("quiet", config)
+        assert commands.cmd_send_back("quiet", config) == 0
         out = capsys.readouterr().out
         assert "Sent back to builder. Automatic rounds: 0 of 3.\n" in out
         assert f"No note recorded. Add one with: {CLI} note quiet --note \"...\"\n" in out
         assert count("quiet", config) == 0
 
         builder_finishes("quiet", config)
-        finish_step("quiet", config, "approved_with_warnings")
-        next_("quiet", config)
+        the_arbiter_asks_the_owner("quiet", config)
         capsys.readouterr()
-        commands.cmd_send_back("quiet", config, note="Rename the helper.")
+        assert commands.cmd_send_back("quiet", config, note="Rename the helper.") == 0
         assert "No note recorded" not in capsys.readouterr().out
 
     def test_new_code_writes_no_event_the_installed_version_cannot_read(self, config):
@@ -385,9 +411,20 @@ class TestTheLedger:
             "worktree_finalized", "migration_override", "historical_note",
             "step_never_delivered", "deploy_decided", "sent_back", "test_run",
             "test_command_accepted", "slept_during_step", "owner_note", "verdict_recorded",
-            # Written at start. The installed version reads events
-            # only by the types it asks for, so it passes over this one.
+            # Written at start. An older version reads events only by the types
+            # it asks for, so it passes over this one.
             "sized"}
+        # Written by the Arbiter's steps. An older version reads events only
+        # by the types it asks for, so it passes over these.
+        # (It cannot save a task that holds an Arbiter step at all: a known
+        # limit in docs/known-limits.md.)
+        arbiter_event_types = {"arbiter_started", "arbiter_ruled", "arbiter_unreadable",
+                               "follow_ups_logged"}
+        # The hint after a Builder step and
+        # what a judging role said of the sizing. Read only by type; older
+        # versions pass over them. A change to the sizing is a further `sized`
+        # event, which an older version reads as the latest sizing.
+        sizing_event_types = {"risk_hint", "sizing_judged"}
         config["max_retries"] = 1
         automatic_rounds("rollback", config, 1)
         send_back_at_the_gate("rollback", config)
@@ -395,13 +432,14 @@ class TestTheLedger:
         reviewer_asks_for_changes("rollback", config)
         builder_finishes("rollback", config)
         reviewer_asks_for_changes("rollback", config)            # stopped by the limit
-        commands.cmd_send_back("rollback", config, note="Once more.")
+        assert commands.cmd_send_back("rollback", config, note="Once more.") == 0
         builder_finishes("rollback", config)
         finish_step("rollback", config, "approved")
-        commands.cmd_override("rollback", "builder", config, note="And the README.")
+        assert commands.cmd_override("rollback", "builder", config, note="And the README.") == 0
 
         events = db.get_events(settings.get_db_connection(), "rollback")
-        assert {event["event_type"] for event in events} <= installed_event_types
+        assert {event["event_type"] for event in events} <= (installed_event_types | arbiter_event_types
+                                                             | sizing_event_types)
         for event in events:
             if event["event_type"] == db.EVENT_SENT_BACK:
                 # The installed version reads to_phase and note; it never needs the key it used to add.
@@ -414,40 +452,50 @@ class TestTheLedger:
         assert state_of("rollback", config)[0] == "in_progress"
 
     def test_the_report_after_a_send_back_is_still_named_fix_n(self, config):
-        """The count goes back to zero; the file name does not."""
+        """The count goes back to zero; the file name does not. (The send-back
+        at the gate now comes after an Arbiter step, which takes a number.)"""
         automatic_rounds("named", config, 1)
         send_back_at_the_gate("named", config)
         builder_finishes("named", config)
         finish_step("named", config, "approved")
-        commands.cmd_override("named", "builder", config)
+        assert commands.cmd_override("named", "builder", config) == 0
         names = [entry["artifact"] for entry in read_api.status_payload("named", config)["history"]
                  if entry["phase"] == "builder"]
-        assert names == ["03-builder.md", "05-builder-fix-1.md", "07-builder-fix-2.md",
-                         "09-builder-fix-3.md"]
+        assert names == ["03-builder.md", "05-builder-fix-1.md", "08-builder-fix-2.md",
+                         "10-builder-fix-3.md"]
 
 
 def installed_version_send_back(task_id: str, config: dict, *, refused_at_the_limit: bool = False) -> None:
     """Write what `relay send-back` wrote before this rule, in the order it
-    wrote it (read from origin/main at 1affd89 and checked by running that
-    code on a scratch ledger).
+    wrote it (read from the older code and checked by running it on a
+    scratch ledger).
 
     Accepted: one save holding `state_saved`, the new Builder step and a
     `retry` event, then a `sent_back` event whose payload also carries
     `stopped_at_retry_limit: false`. Refused at the limit: one save that
     sets the task `blocked`, then a `sent_back` event marked `true`; no
-    step and no `retry` event."""
+    step and no `retry` event.
+
+    A save does not work out steps and retries
+    from the state dict, so this writes them with the explicit calls, in
+    the order that one save wrote them: the task row (`state_saved`), then
+    the step, then the `retry`."""
     conn = settings.get_db_connection()
     state = run_state.load_run_state(task_id, config)
     latest = read_api.read_latest_step(task_id, state, config)
-    run_state._record_verdict_in_history(state, latest["phase"], latest["verdict"])
+    run_state.record_verdict(task_id, state, latest["phase"], latest["step"], latest["verdict"], config)
     if refused_at_the_limit:
         state["status"] = "blocked"
+        run_state.save_run_state(task_id, state, config)
     else:
-        run_state.increment_retry(state, "builder")
         step = run_state.get_next_step(task_id, config)
         state["current_phase"], state["next_step"] = "builder", step + 1
+        run_state.save_run_state(task_id, state, config)
         run_state.record_phase(state, "builder", step)
-    run_state.save_run_state(task_id, state, config)
+        db.record_dispatch(conn, task_id, phase="builder", step=step,
+                           artifact_filename=agents.artifact_name("builder", step, state),
+                           created_at=state["history"][-1]["timestamp"])
+        db.record_retry(conn, task_id, phase="builder")
     payload = {"to_phase": "builder", "note": "An old note.",
                "stopped_at_retry_limit": refused_at_the_limit}
     with conn:
@@ -470,13 +518,15 @@ class TestTasksFromBeforeThisRule:
     def test_a_ledger_written_by_the_installed_version_is_recounted(self, config, monkeypatch):
         """Nothing is converted: the same events are read by the new rule.
         The installed version counted every one of these rounds (4 here).
-        The walk runs eight Builder steps, so the tripwire is set out of its
-        way: this test is about the retry count."""
-        monkeypatch.setattr(routing, "FIX_ROUNDS_BEFORE_THE_OWNER_DECIDES", 100)
+        The walk runs eight Builder steps, so the Arbiter's count is set out
+        of its way: this test is about the retry count. The installed
+        version's `relay next` stopped at each warnings gate, so each is
+        stood at as it left it."""
+        monkeypatch.setattr(arbiter, "REVIEW_LOOPS_BEFORE_THE_ARBITER", 100)
         automatic_rounds("old", config, 1)  # an automatic round wrote then what it writes now
         for _ in range(3):
             finish_step("old", config, "approved_with_warnings")
-            next_("old", config)
+            stand_at_the_gate("old", config)
             mark = event_count("old")
             installed_version_send_back("old", config)
             assert event_types_since("old", mark) == ["state_saved", "retry", "sent_back"]
@@ -492,7 +542,7 @@ class TestTasksFromBeforeThisRule:
             builder_finishes("old", config)
         reviewer_asks_for_changes("old", config)
         assert state_of("old", config) == ("blocked", "reviewer")
-        commands.cmd_send_back("old", config, note="Decided.")
+        assert commands.cmd_send_back("old", config, note="Decided.") == 0
         assert (state_of("old", config), count("old", config)) == (("in_progress", "builder"), 0)
 
     def test_a_send_back_the_installed_version_refused_reads_paused_and_moves_by_override(
@@ -503,15 +553,15 @@ class TestTasksFromBeforeThisRule:
         to move it."""
         automatic_rounds("refused", config, 3)
         finish_step("refused", config, "approved_with_warnings")
-        next_("refused", config)
+        stand_at_the_gate("refused", config)  # where the installed version's `relay next` stopped
         mark = event_count("refused")
         installed_version_send_back("refused", config, refused_at_the_limit=True)
         assert event_types_since("refused", mark) == ["state_saved", "sent_back"]
 
         assert (state_of("refused", config), count("refused", config)) == (("blocked", "reviewer"), 0)
         assert read_api.gate_check_payload("refused", config)["gate"]["kind"] == "blocked"
-        assert "is blocked: it was paused." in refused(commands.cmd_send_back, "refused", config, capsys)
-        commands.cmd_override("refused", "builder", config)
+        assert "is blocked: it was paused." in refused(send_back_from_the_command_line, "refused", config, capsys)
+        assert commands.cmd_override("refused", "builder", config) == 0
         assert state_of("refused", config) == ("in_progress", "builder")
 
     def test_an_old_blocked_task_at_the_limit_takes_a_send_back(self, config):
@@ -520,13 +570,14 @@ class TestTasksFromBeforeThisRule:
         automatic_rounds("old-stop", config, 3)
         finish_step("old-stop", config, "changes_requested")
         state = run_state.load_run_state("old-stop", config)
-        run_state._record_verdict_in_history(state, "reviewer", "changes_requested")
+        run_state.record_verdict("old-stop", state, "reviewer", state["history"][-1]["step"],
+                                 "changes_requested", config)
         state["status"] = "blocked"
         run_state.save_run_state("old-stop", state, config)
 
         gate = read_api.gate_check_payload("old-stop", config)["gate"]
         assert (gate["kind"], gate["next_phase"]) == ("retry_limit", "builder")
-        commands.cmd_send_back("old-stop", config, note="Fix the last one.")
+        assert commands.cmd_send_back("old-stop", config, note="Fix the last one.") == 0
         assert (state_of("old-stop", config), count("old-stop", config)) == (
             ("in_progress", "builder"), 0)
 
@@ -540,7 +591,7 @@ class TestTasksFromBeforeThisRule:
         gate = read_api.gate_check_payload("paused", config)["gate"]
         assert (gate["state"], gate["kind"], gate["send_back_command"]) == (
             "waiting_on_owner", "blocked", None)
-        for command in (commands.cmd_send_back, next_):
+        for command in (send_back_from_the_command_line, next_from_the_command_line):
             out = refused(command, "paused", config, capsys)
             assert "Task paused is blocked: it was paused." in out
             assert f"{CLI} override paused <phase>" in out and f"{CLI} abort paused" in out
@@ -558,7 +609,7 @@ class TestTasksFromBeforeThisRule:
         assert count("legacy", files_config) == 3
         finish("changes_requested")
         assert state_of("legacy", files_config) == ("blocked", "reviewer")  # stopped early, and asks
-        commands.cmd_send_back("legacy", files_config, note="Go on.")
+        assert commands.cmd_send_back("legacy", files_config, note="Go on.") == 0
         assert (state_of("legacy", files_config), count("legacy", files_config)) == (
             ("in_progress", "builder"), 0)
         assert run_state.load_run_state("legacy", files_config)["retries"]["builder"] == 0
@@ -569,16 +620,17 @@ class TestTasksFromBeforeThisRule:
         """`relay note` needs the ledger, so on the files backend there is
         nothing to point to."""
         files_config, finish = files_backend_task_in_review("no-ledger", tmp_path, monkeypatch)
-        finish("approved_with_warnings")
+        finish("approved_with_warnings")  # the Arbiter is called; it asks the owner
+        finish("escalate", yaml.safe_dump(ESCALATION))
         capsys.readouterr()
-        commands.cmd_send_back("no-ledger", files_config)
+        assert commands.cmd_send_back("no-ledger", files_config) == 0
         out = capsys.readouterr().out
         assert "Sent back to builder. Automatic rounds: 0 of 3.\n" in out
         assert "No note recorded" not in out and f"{CLI} note" not in out
 
         capsys.readouterr()
         with pytest.raises(SystemExit) as exit_info:
-            commands.cmd_note("no-ledger", files_config, "Too late.")
+            run_relay(files_config, "note", "no-ledger", "--note", "Too late.")
         assert exit_info.value.code == 1  # the command the hint used to name
 
 
@@ -612,11 +664,11 @@ class TestWhatTheOwnerReads:
         automatic_rounds("json", config, 1)
         status = read_api.status_payload("json", config)
         assert (status["schema_version"], status["retries"], status["max_retries"]) == (
-            3, {"builder": 1, "reviewer": 0}, 3)
+            4, {"builder": 1, "reviewer": 0}, 3)
         send_back_at_the_gate("json", config)
         status = read_api.status_payload("json", config)
         assert (status["schema_version"], status["retries"], status["max_retries"]) == (
-            3, {"builder": 0, "reviewer": 0}, 3)
+            4, {"builder": 0, "reviewer": 0}, 3)
 
     def test_gate_check_at_the_limit_offers_send_back_before_and_after_the_stop(self, config):
         config["max_retries"] = 1
@@ -671,7 +723,7 @@ class TestWhatTheOwnerReads:
         assert view_of("lowered", config)["ask"] == (
             f"Builder went back for fixes {times} in a row without you deciding. "
             "Send it back for one more round, move it on, or abort.")
-        assert refused(next_, "lowered", config, capsys).startswith(
+        assert refused(next_from_the_command_line, "lowered", config, capsys).startswith(
             f"Task lowered is stopped: {stopped} (limit 0).\n")
 
     def test_a_paused_task_still_reads_paused(self, config):
@@ -726,8 +778,10 @@ class TestWhatTheOwnerReads:
 
 
 # ---------------------------------------------------------------------------
-# The tripwire: a high after five fix rounds stops for the owner
+# The tripwire: a high after five review loops calls the Arbiter
 # ---------------------------------------------------------------------------
+# A high past the tripwire goes to the Arbiter, and no stop recommends a
+# send-back by default.
 
 THRESHOLD = 5
 # The walk from the Reviewer's step to a report of each rating role.
@@ -736,8 +790,9 @@ HIGH = {"reviewer": "changes_requested", "tester": "fail", "security": "critical
 
 
 def fix_rounds_by_send_back(task_id: str, config: dict, rounds: int) -> None:
-    """Start a task and run this many fix rounds, each one the owner's
-    send-back at a warnings gate, leaving the Reviewer running."""
+    """Start a task and run this many review loops, each one the owner's
+    send-back at an Arbiter's escalation on a warnings verdict, leaving the
+    Reviewer running."""
     task_at(task_id, config, UP_TO_REVIEW)
     for round_number in range(rounds):
         send_back_at_the_gate(task_id, config, note=f"Round {round_number + 1}.")
@@ -757,21 +812,24 @@ def gate_of(task_id: str, config: dict) -> dict:
     return read_api.gate_check_payload(task_id, config)["gate"]
 
 
+def latest_phase(task_id: str, config: dict) -> str:
+    return read_api.status_payload(task_id, config)["latest_step"]["phase"]
+
+
 class TestTheFixRoundTripwire:
     @pytest.mark.parametrize("phase", list(HIGH))
-    def test_a_high_after_five_fix_rounds_stops_for_the_owner(self, config, phase):
+    def test_a_high_after_five_review_loops_runs_the_arbiter(self, config, phase):
         fix_rounds_by_send_back("five", config, THRESHOLD)
-        steps_before = len(steps("five", config)) + len(TO_EACH_RATING_ROLE[phase])
+        builds_before = steps("five", config).count("builder")
         report_a_high("five", config, phase)
         gate = gate_of("five", config)
-        assert (gate["state"], gate["kind"], gate["next_phase"]) == (
-            "waiting_on_owner", "fix_rounds", "builder")
-        assert (gate["send_back_recommended"], gate["approve_command"]) == (True, None)
-        assert gate["send_back_command"] == f"{CLI} send-back five"
-        assert state_of("five", config) == ("in_progress", phase)
-        assert len(steps("five", config)) == steps_before  # no sixth round was started
-        assert gate["fix_rounds"]["count"] == THRESHOLD
-        assert read_api.list_payload(config)["tasks"][0]["fix_rounds"] == THRESHOLD
+        assert latest_phase("five", config) == "arbiter"
+        assert (gate["state"], gate["kind"]) == ("waiting_on_agent", None)
+        assert steps("five", config).count("builder") == builds_before  # no sixth round was started
+        assert "fix_rounds" not in gate
+        started = events_of_type("five", db.EVENT_ARBITER_STARTED)
+        assert started[-1]["payload"]["situation"] == "loop"
+        assert started[-1]["payload"]["trigger"]["phase"] == phase
 
     @pytest.mark.parametrize("phase", list(HIGH))
     def test_the_same_high_after_four_fix_rounds_goes_back_to_the_builder(self, config, phase):
@@ -782,51 +840,53 @@ class TestTheFixRoundTripwire:
         assert "fix_rounds" not in gate_of("four", config)
 
     def test_rounds_chosen_at_a_gate_or_by_override_or_note_count_the_same(self, config):
+        """Each Builder step that followed a Reviewer report counts, whoever
+        sent it back: an escalation's send-back, an override, or Relay."""
         task_at("mixed", config, UP_TO_REVIEW)
-        send_back_at_the_gate("mixed", config, note=None)                  # round 1
+        send_back_at_the_gate("mixed", config, note=None)                  # loop 1
         builder_finishes("mixed", config)
         finish_step("mixed", config, "approved")
-        commands.cmd_override("mixed", "builder", config)                  # round 2
+        assert commands.cmd_override("mixed", "builder", config) == 0                  # loop 2
         builder_finishes("mixed", config)
         finish_step("mixed", config, "approved")
-        commands.cmd_override("mixed", "builder", config, note="And this.")  # round 3
+        assert commands.cmd_override("mixed", "builder", config, note="And this.") == 0  # loop 3
         builder_finishes("mixed", config)
-        send_back_at_the_gate("mixed", config, note="With a note.")       # round 4
+        send_back_at_the_gate("mixed", config, note="With a note.")       # loop 4
         builder_finishes("mixed", config)
-        reviewer_asks_for_changes("mixed", config)                         # round 5, automatic
+        reviewer_asks_for_changes("mixed", config)                         # loop 5, automatic
         builder_finishes("mixed", config)
         assert steps("mixed", config).count("builder") == THRESHOLD + 1
         reviewer_asks_for_changes("mixed", config)
-        assert gate_of("mixed", config)["kind"] == "fix_rounds"
-        assert state_of("mixed", config) == ("in_progress", "reviewer")
+        assert latest_phase("mixed", config) == "arbiter"
+        assert state_of("mixed", config) == ("in_progress", "arbiter")
 
-    @pytest.mark.parametrize("verdict, kind, phase", [
-        ("changes_requested", "fix_rounds", "reviewer"), ("approved", None, "tester")])
-    def test_after_a_send_back_a_high_after_round_six_stops_again_and_none_moves_on(
-            self, config, verdict, kind, phase):
+    @pytest.mark.parametrize("verdict, phase", [
+        ("changes_requested", "arbiter"), ("approved", "tester")])
+    def test_after_a_send_back_a_high_after_round_six_runs_the_arbiter_again_and_none_moves_on(
+            self, config, verdict, phase):
         fix_rounds_by_send_back("again", config, THRESHOLD)
         reviewer_asks_for_changes("again", config)
-        assert gate_of("again", config)["kind"] == "fix_rounds"
-        commands.cmd_send_back("again", config, note="One more.")         # round 6
+        assert latest_phase("again", config) == "arbiter"
+        finish_arbiter("again", config, "escalate")
+        next_("again", config)
+        assert commands.cmd_send_back("again", config, note="One more.") == 0         # loop 6
         builder_finishes("again", config)
         finish_step("again", config, verdict)
         next_("again", config)
         assert state_of("again", config) == ("in_progress", phase)
-        gate = gate_of("again", config)
-        assert gate["kind"] == kind
-        if kind:
-            assert gate["fix_rounds"]["count"] == THRESHOLD + 1
+        assert "fix_rounds" not in gate_of("again", config)
 
-    @pytest.mark.parametrize("walk, verdict, kind, phase", [
-        ([], "approved_with_warnings", "approval", "reviewer"),
-        ([], "approved", None, "tester"),
-        (["approved"], "pass_with_concerns", "approval", "tester"),
-        (["approved", "pass"], "findings", "approval", "security"),
-        (["approved", "pass"], "secure", None, "security"),
+    @pytest.mark.parametrize("walk, verdict, phase", [
+        ([], "approved_with_warnings", "arbiter"),
+        ([], "approved", "tester"),
+        (["approved"], "pass_with_concerns", "arbiter"),
+        (["approved", "pass"], "findings", "arbiter"),
+        (["approved", "pass"], "secure", "security"),
     ])
-    def test_a_medium_or_low_after_five_rounds_routes_as_before(self, config, walk, verdict,
-                                                                 kind, phase):
-        """A guard: these pass before the tripwire and after."""
+    def test_a_medium_goes_to_the_arbiter_and_a_pass_routes_as_before(self, config, walk, verdict,
+                                                                       phase):
+        """A medium goes to the Arbiter at every round; a clean pass routes
+        as it always did (to the next phase, or done)."""
         fix_rounds_by_send_back("calm", config, THRESHOLD)
         for earlier in walk:
             finish_step("calm", config, earlier)
@@ -834,8 +894,8 @@ class TestTheFixRoundTripwire:
         finish_step("calm", config, verdict)
         next_("calm", config)
         gate = gate_of("calm", config)
-        assert gate["kind"] == kind and "fix_rounds" not in gate
-        assert state_of("calm", config)[1] in (phase, "done")
+        assert "fix_rounds" not in gate and gate["send_back_recommended"] is False
+        assert latest_phase("calm", config) == phase
 
     def test_a_failing_test_run_after_five_rounds_routes_as_before(self, config, monkeypatch):
         """A guard: a Tester's pass that Relay's own run fails goes back to
@@ -852,11 +912,11 @@ class TestTheFixRoundTripwire:
         assert state_of("red", config) == ("in_progress", "builder")
         assert count("red", config) == 1
 
-    def test_the_retry_limit_and_the_tripwire_on_one_route_make_one_stop_with_the_list(
+    def test_the_retry_limit_where_the_arbiter_would_run_is_one_stop_that_recommends_nothing(
             self, config, capsys):
         config["max_retries"] = 1
         fix_rounds_by_send_back("both", config, THRESHOLD - 1)
-        reviewer_asks_for_changes("both", config)                          # round 5, automatic
+        reviewer_asks_for_changes("both", config)                          # loop 5, automatic
         builder_finishes("both", config)
         assert count("both", config) == 1
         capsys.readouterr()
@@ -864,14 +924,15 @@ class TestTheFixRoundTripwire:
         out = capsys.readouterr().out
         assert out.count("STOPPED") == 1 and "HUMAN GATE" not in out
         assert state_of("both", config) == ("blocked", "reviewer")
-        assert "5 fix rounds have run and the latest report still asks for fixes." in out
-        assert f"    {CLI} send-back both --note \"what to fix\"   (recommended; " in out
+        assert "  5 review loops on this plan.\n" in out
+        assert "recommended" not in out
         gate = gate_of("both", config)
-        assert (gate["kind"], gate["send_back_recommended"], gate["fix_rounds"]["count"]) == (
-            "retry_limit", True, THRESHOLD)
-        out = refused(next_, "both", config, capsys)
-        assert "5 fix rounds have run" in out and "(recommended; " in out
-        assert read_api.list_payload(config)["tasks"][0]["fix_rounds"] == THRESHOLD
+        assert (gate["kind"], gate["send_back_recommended"], gate["review_loops"]) == (
+            "retry_limit", False, THRESHOLD)
+        assert "fix_rounds" not in gate
+        out = refused(next_from_the_command_line, "both", config, capsys)
+        assert "5 review loops on this plan." in out and "recommended" not in out
+        assert read_api.list_payload(config)["tasks"][0]["fix_rounds"] is None
 
     def test_the_limit_alone_still_stops_as_before_and_lists_nothing(self, config, capsys):
         """A guard on the retry limit's own stop below the tripwire."""
@@ -880,12 +941,13 @@ class TestTheFixRoundTripwire:
         reviewer_asks_for_changes("limit", config)
         gate = gate_of("limit", config)
         assert (gate["kind"], gate["send_back_recommended"]) == ("retry_limit", False)
-        assert "fix_rounds" not in gate
+        assert "fix_rounds" not in gate and "review_loops" not in gate
         assert read_api.list_payload(config)["tasks"][0]["fix_rounds"] is None
 
     def test_fix_rounds_counts_every_builder_step_whatever_its_verdict(self):
         """A Builder step that changed nothing, or ended `needs-architect`
-        or `blocked`, is a round all the same."""
+        or `blocked`, is a round all the same. (Kept: a fix_rounds gate left
+        standing from before the Arbiter still reads this count.)"""
         history = ([{"phase": "designer"}, {"phase": "architect"}]
                    + [{"phase": "builder", "verdict": verdict} for verdict in
                       ("ready-for-review", "needs-architect", "blocked", None)]
@@ -895,72 +957,70 @@ class TestTheFixRoundTripwire:
         assert run_state.fix_rounds({}) == 0
 
     def test_the_legacy_pentest_verdict_is_outside_the_tripwire(self):
-        """A guard: the tripwire reads the Reviewer, Tester and Security
-        only, as the brief names them."""
-        state = {"retries": {}, "history": [{"phase": "builder", "step": step}
-                                            for step in range(THRESHOLD + 1)]}
+        """A guard: the Arbiter is called on the Reviewer, Tester and
+        Security only. A legacy Pentest high has no route at all, so the
+        owner decides with no list of fix rounds."""
+        history = []
+        for loop in range(THRESHOLD + 1):
+            history += [{"phase": "builder", "step": 2 * loop + 1, "verdict": "ready-for-review"},
+                        {"phase": "reviewer", "step": 2 * loop + 2, "verdict": "changes_requested"}]
+        state = {"retries": {}, "history": history}
         decision = routing.decide_routing(state, "pentest", "vulnerable", DEFAULT_CONFIG)
-        assert (decision.outcome, decision.next_phase, decision.lists_fix_rounds) == (
-            routing.ROUTE_ADVANCE, "builder", False)
+        assert (decision.outcome, decision.gate_kind, decision.next_phase,
+                decision.lists_fix_rounds) == (
+            routing.ROUTE_OWNER_GATE, routing.GATE_OWNER_DECISION, None, False)
         tripped = routing.decide_routing(state, "reviewer", "changes_requested", DEFAULT_CONFIG)
-        assert (tripped.outcome, tripped.gate_kind) == (routing.ROUTE_OWNER_GATE, "fix_rounds")
+        assert (tripped.outcome, tripped.next_phase) == (routing.ROUTE_ADVANCE, "arbiter")
 
-    def test_relay_next_prints_the_gate_with_the_list_and_the_recommended_send_back(
-            self, config, capsys):
+    def test_relay_next_prints_the_arbiter_step_and_the_count_that_called_it(self, config, capsys):
         fix_rounds_by_send_back("printed", config, THRESHOLD)
         capsys.readouterr()
         reviewer_asks_for_changes("printed", config)
-        out = before_the_stop_card(capsys.readouterr().out, "printed", config)
-        artifact =read_api.status_payload("printed", config)["latest_step"]["artifact"]
-        assert out.endswith(
-            "\n  HUMAN GATE: fix rounds are still finding highs.\n"
-            f"  Review the artifact at: {settings.TASKS_DIR / 'printed' / artifact}\n"
-            "  5 fix rounds have run and the latest report still asks for fixes.\n"
-            "\n  To send it back to the builder for fixes (recommended):\n"
-            f"    {CLI} send-back printed\n"
-            "\n  To move it somewhere else:\n"
-            f"    {CLI} override printed <phase>\n"
-            "\n  To stop:\n"
-            f"    {CLI} abort printed\n")
-        capsys.readouterr()
-        commands.cmd_gate_check("printed", config)
-        checked = capsys.readouterr().out
-        assert "  Gate: waiting_on_owner (fix_rounds)\n" in checked
-        assert "  5 fix rounds have run and the latest report still asks for fixes.\n" in checked
-        assert f"  To send back (recommended): {CLI} send-back printed\n" in checked
+        out = capsys.readouterr().out
+        artifact = read_api.status_payload("printed", config)["latest_step"]["artifact"]
+        assert ("  Routing: reviewer verdict: changes_requested; 5 review loops on this plan, "
+                "so the Arbiter decides\n") in out
+        assert f"\n  Next phase: arbiter\n  Artifact: {artifact}\n" in out
+        assert artifact.endswith("-arbiter.md")
+        assert "HUMAN GATE" not in out and "(recommended)" not in out
 
 
-def test_the_stop_says_how_many_fix_rounds_have_run(config, capsys):
-    """The tripwire's gate says a count, in the gate's JSON, in what
-    `relay next` prints, in the card's ask and in the waiting line."""
+def test_a_standing_fix_rounds_gate_says_how_many_fix_rounds_have_run_and_recommends_nothing(
+        config, capsys):
+    """A fix_rounds gate left standing from before the Arbiter says a count,
+    in the gate's JSON, in what `relay next` prints, in the card's ask and in
+    the waiting line, as it did; it no longer recommends a send-back."""
     fix_rounds_by_send_back("counted", config, THRESHOLD)
+    finish_step("counted", config, "changes_requested")
+    stand_at_the_gate("counted", config)
     capsys.readouterr()
-    reviewer_asks_for_changes("counted", config)
+    next_("counted", config)
     printed = capsys.readouterr().out
     sentence = "5 fix rounds have run and the latest report still asks for fixes."
     gate = read_api.gate_check_payload("counted", config)["gate"]
     assert gate["fix_rounds"] == {"count": 5, "lines": [sentence]}
-    assert (gate["kind"], gate["send_back_recommended"]) == ("fix_rounds", True)
+    assert (gate["kind"], gate["send_back_recommended"]) == ("fix_rounds", False)
     assert f"  {sentence}\n" in printed
+    assert "  HUMAN GATE: fix rounds are still finding highs.\n" in printed
+    assert "(recommended)" not in printed
+    assert latest_phase("counted", config) == "reviewer"  # no Arbiter step was started
     assert view_of("counted", config)["ask"] == (
         f"{sentence} " + board_view._ASK_BY_KIND["fix_rounds"])
     assert waiting_rows(config) == [("counted", "Still finding highs after 5 fix rounds")]
 
 
 class TestTheOwnersNumber:
-    """Two fix rounds, then the owner decides."""
+    """The owner's number, two review loops, is when the Arbiter is called."""
 
-    def test_the_tripwire_is_set_at_two(self):
-        assert routing.FIX_ROUNDS_BEFORE_THE_OWNER_DECIDES == 2
+    def test_the_arbiter_is_called_at_two(self):
+        assert arbiter.REVIEW_LOOPS_BEFORE_THE_ARBITER == 2
 
     @pytest.mark.parametrize("phase", list(HIGH))
-    def test_a_high_after_two_fix_rounds_stops_for_the_owner(self, config, phase):
+    def test_a_high_after_two_review_loops_runs_the_arbiter(self, config, phase):
         fix_rounds_by_send_back("two", config, 2)
         report_a_high("two", config, phase)
-        gate = gate_of("two", config)
-        assert gate["kind"] == "fix_rounds"
-        assert gate["fix_rounds"]["count"] == 2
-        assert state_of("two", config) == ("in_progress", phase)
+        assert latest_phase("two", config) == "arbiter"
+        assert state_of("two", config) == ("in_progress", "arbiter")
 
     @pytest.mark.parametrize("phase", list(HIGH))
     def test_a_high_after_one_fix_round_goes_back_to_the_builder(self, config, phase):

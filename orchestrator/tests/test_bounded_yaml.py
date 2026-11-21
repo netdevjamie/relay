@@ -106,8 +106,8 @@ class TestWhatIsNotRead:
         bounded_yaml.CANNOT_BE_BUILT, bounded_yaml.CANNOT_BE_BUILT,
         bounded_yaml.HOLDS_A_TAG, bounded_yaml.HOLDS_A_TAG]), ids=BAD_VALUE_NAMES)
     def test_a_value_yamls_loader_raised_on_is_not_read(self, text, reason, nothing_composed):
-        """YAML's loader raises ValueError or AttributeError on these, not
-        one of its own errors."""
+        """YAML's loader raised ValueError or
+        AttributeError on these, not one of its own errors."""
         with refused(reason):
             bounded_yaml.load(text)
 

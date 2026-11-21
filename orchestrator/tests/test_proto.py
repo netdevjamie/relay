@@ -12,7 +12,7 @@ import settings
 import sizing
 
 IDEA = ("A one-tap check-in for crews: the foreman taps a job, the app says who is there, "
-        "and James sees it on their phone without calling anyone. Wow is no phone calls.")
+        "and the office sees it on a phone without calling anyone. Wow is no phone calls.")
 T0 = datetime(2026, 11, 7, 9, 0, tzinfo=timezone.utc)
 
 

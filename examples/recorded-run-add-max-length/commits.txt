@@ -1,4 +1,0 @@
-8411999 Say characters, not digits, in the cap-length refusal
-0aeb38f Treat every argument but --max-length as the title; refuse caps over 20 digits
-45b6298 Add failing tests: hyphen-leading titles, long caps, README examples
-ded286d Add max_length cap to slugify and --max-length to the command line

@@ -16,12 +16,18 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import agents
 import report_reader
+import risk_hint
+import risk_record
 import settings
-from read_api import GATE_READY, GATE_WAITING_ON_AGENT, GATE_WAITING_ON_OWNER
+from arbiter_record import DECISION_WORDS
+from printable import QUOTED_LIMIT, printable
+from read_api import GATE_READY, GATE_TIME_LIMIT, GATE_WAITING_ON_AGENT, GATE_WAITING_ON_OWNER
 from routing import (
-    GATE_APPROVAL, GATE_BLOCKED, GATE_DEPLOY_APPROVAL, GATE_DEPLOY_FLAG_MISSING,
-    GATE_FIX_ROUNDS, GATE_OWNER_DECISION, GATE_RETRY_LIMIT,
+    GATE_APPROVAL, GATE_ARBITER_ESCALATION, GATE_ARBITER_NEEDS_OWNER, GATE_ARBITER_UNREADABLE,
+    GATE_BLOCKED, GATE_DEPLOY_APPROVAL, GATE_DEPLOY_FLAG_MISSING,
+    GATE_FIX_ROUNDS, GATE_OWNER_DECISION, GATE_RETRY_LIMIT, GATE_RISK_UNANSWERED,
 )
 from run_state import _is_agent_artifact
 
@@ -42,7 +48,7 @@ PLACE_NOT_GIVEN = "place not given"
 # The second line of a "Needs you" row, by gate kind. An approval gate is
 # named after the role that stopped, so it is not in this table. {rounds} is
 # the automatic rounds that ran before the limit stopped the task, in words;
-# {fix_rounds} the fix rounds that ran before the tripwire stopped it.
+# {fix_rounds} the fix rounds that ran before a standing fix_rounds gate.
 _ROW_LINE_BY_KIND = {
     GATE_DEPLOY_APPROVAL: "Ready to deploy",
     GATE_DEPLOY_FLAG_MISSING: "Plan does not say if it deploys",
@@ -50,6 +56,10 @@ _ROW_LINE_BY_KIND = {
     GATE_RETRY_LIMIT: "Stopped after {rounds}",
     GATE_FIX_ROUNDS: "Still finding highs after {fix_rounds} fix rounds",
     GATE_BLOCKED: "Paused",
+    GATE_ARBITER_ESCALATION: "The Arbiter asks you",
+    GATE_ARBITER_NEEDS_OWNER: "The Arbiter's ruling needs your yes",
+    GATE_ARBITER_UNREADABLE: "Relay could not act on the Arbiter",
+    GATE_RISK_UNANSWERED: "Reviewer did not answer the risk hint",
 }
 
 # What the owner is being asked, by gate kind. {next} is the next phase
@@ -64,32 +74,49 @@ _ASK_BY_KIND = {
                       "Send it back for one more round, move it on, or abort.",
     GATE_FIX_ROUNDS: "Send it back for another round, move it somewhere else, or abort.",
     GATE_BLOCKED: "This task is paused. It moves again only when you override it or abort it.",
+    GATE_TIME_LIMIT: "Start {next} again, move the task to a phase, or abort.",
+    GATE_ARBITER_ESCALATION: "The Arbiter asks you to decide. Its question and choices are below.",
+    GATE_ARBITER_NEEDS_OWNER: "{because}. Accept its ruling, send it back, or move it.",
+    GATE_ARBITER_UNREADABLE: "Pick the next phase, send it back to the Builder, run the Arbiter "
+                             "again, or abort.",
+    GATE_RISK_UNANSWERED: "The Reviewer did not answer the risk hint. Approve to go on to {next}, "
+                          "send it back, or re-size it with relay resize.",
 }
+# Ahead of the ask at a retry-limit stop on a task the Arbiter has ruled on.
+LAST_RULED = "The Arbiter last ruled (step {step}): {decision}."
+# The Arbiter's own words on its gate, each labelled as its words.
+ARBITER_REASON_LABEL = "The Arbiter's reason: "
+ARBITER_QUESTION_LABEL = "The Arbiter's question: "
+ARBITER_FOLLOW_UPS = "Follow-ups the Arbiter recorded"
+ARBITER_KNOWN_FLAWS = "Known flaws it accepted"
+ARBITER_NONE_RECORDED = "The Arbiter recorded no follow-ups."
+# At an escalation, what Relay itself warns of, ahead of the Arbiter's words.
+RELAY_WARNS = "Relay warns: {because}."
 _ASK_APPROVAL_CLOSES = "Accept these and close the task, or send it back for fixes."
 
 CAPPED_LABEL = "Capped verdict"
 CAPPED_SENTENCE = ("Security found nothing to fix. The verdict reads 'findings' only because this "
                    "project's profile names no safe test target, so no live attack was run.")
-# A report that says it is capped and still lists findings: the card says
+# A report that says it is capped and still lists findings: the board says
 # what is shown, not that nothing was found.
 CAPPED_BUT_LISTS = "Security marked this verdict as capped but lists {findings}. Read them."
-CAPPED_NOT_CONFIRMED = ("Security marked this verdict as capped. The card cannot confirm from "
+CAPPED_NOT_CONFIRMED = ("Security marked this verdict as capped. The board cannot confirm from "
                         "the report that it found nothing to fix. Read the report.")
 
 SEVERITY_TITLES = {"high": "High", "medium": "Medium", "low": "Low"}
 NOT_RATED_TITLE = "Not rated"
 WRITTEN_BEFORE_RATING = "This report was written before findings were rated."
-FINDINGS_ARE_IN_THE_REPORT = WRITTEN_BEFORE_RATING + " Its findings are in the report."
-NO_FINDINGS = "No findings at this gate."
-# The card says a report has no findings, or that its list is the whole
+FINDINGS_ARE_BELOW = WRITTEN_BEFORE_RATING + " Its findings are in the report below."
+NO_FINDINGS = "No findings at this gate. The report is below."
+# The board says a report has no findings, or that its list is the whole
 # list, only on things the report's text cannot fake: see _may_say_none and
 # report_reader.read_report. In every other case it says one of these.
-VERDICT_BUT_NO_ROWS = ("{role}'s verdict is '{verdict}', but the card read no rated findings in "
-                       "its report. Read the report.")
-NONE_NOT_CONFIRMED = ("The card could not read this report's findings with confidence, so it "
-                      "cannot say there are none. Read the report.")
-ROWS_MAY_NOT_BE_ALL = ("The card may not have read every finding in this report. "
-                       "Read the report.")
+VERDICT_BUT_NO_ROWS = ("{role}'s verdict is '{verdict}', but the board read no rated findings in "
+                       "its report. Read the report below.")
+NONE_NOT_CONFIRMED = ("The board could not read this report's findings with confidence, so it "
+                      "cannot say there are none. Read the report below.")
+ROWS_MAY_NOT_BE_ALL = ("The board may not have read every finding in this report. "
+                       "Read the report below.")
 SUMMARY_NOT_READ = ("{fallback} The report's summary line could not be read with confidence, "
                     "so it is not shown.")
 # Roles whose reports list findings, with the verdict each gives when it
@@ -122,7 +149,7 @@ def _verdict_mid_sentence(verdict) -> str:
 # ---------------------------------------------------------------------------
 # Times: the Mac's local time, short for today and a date for other days
 # ---------------------------------------------------------------------------
-# `now` is the clock the caller reads. The commands pass the plain local
+# `now` is the clock the caller reads. `relay serve` passes the plain local
 # time (no zone), and each timestamp is then converted by the system's own
 # rules for its date, daylight saving included. Tests pass a `now` with a
 # fixed zone so their answers do not depend on the machine.
@@ -193,6 +220,10 @@ def row_line(row: dict, now: datetime) -> str:
     latest = row["latest_step"] or {}
     role = role_title(latest.get("phase") or row["current_phase"])
     if row["gate_state"] == GATE_WAITING_ON_OWNER:
+        if row["gate_kind"] == GATE_TIME_LIMIT:
+            stop = row.get("time_limit") or {}
+            return (f"Stopped: {role_title(stop.get('phase'))} ran past its "
+                    f"{agents.limit_in_words(stop.get('limit_seconds'))} limit")
         if row["gate_kind"] in _ROW_LINE_BY_KIND:
             rounds = row["automatic_rounds"]
             return _ROW_LINE_BY_KIND[row["gate_kind"]].format(
@@ -280,10 +311,20 @@ def _next_phase_title(next_phase) -> str:
     return role_title(next_phase) if next_phase else "the next phase"
 
 
-def _ask(gate: dict, retries: dict) -> str:
-    """What the owner is asked. Where the tripwire stopped the task, how
-    many fix rounds have run comes first."""
-    return _fix_rounds_listed(gate) + _ask_for_kind(gate, retries)
+def _ask(gate: dict, retries: dict, rulings: list | None = None) -> str:
+    """What the owner is asked. At a standing fix_rounds gate, how many fix
+    rounds have run comes first; at a retry-limit stop, the Arbiter's latest
+    ruling, if it has ruled."""
+    return _fix_rounds_listed(gate) + _last_ruled(gate, rulings or []) + _ask_for_kind(gate, retries)
+
+
+def _last_ruled(gate: dict, rulings: list) -> str:
+    if gate["kind"] != GATE_RETRY_LIMIT:
+        return ""
+    ruled = [ruling for ruling in rulings if ruling.get("decision") in DECISION_WORDS]
+    if not ruled:
+        return ""
+    return LAST_RULED.format(step=ruled[-1]["step"], decision=DECISION_WORDS[ruled[-1]["decision"]]) + " "
 
 
 def _ask_for_kind(gate: dict, retries: dict) -> str:
@@ -291,8 +332,10 @@ def _ask_for_kind(gate: dict, retries: dict) -> str:
         return _ASK_APPROVAL_CLOSES
     sentence = _ASK_BY_KIND.get(gate["kind"], "Relay stopped here for you to decide how to go on.")
     rounds = retries.get(gate["next_phase"], 0)
+    because = "; ".join((gate.get("arbiter") or {}).get("needs_owner_because") or [])
     return sentence.format(next=_next_phase_title(gate["next_phase"]),
-                           times="1 time" if rounds == 1 else f"{rounds} times")
+                           times="1 time" if rounds == 1 else f"{rounds} times",
+                           because=because[:1].upper() + because[1:])
 
 
 def _fix_rounds_listed(gate: dict) -> str:
@@ -305,7 +348,7 @@ def _fix_rounds_listed(gate: dict) -> str:
 
 def _gate_headline(latest: dict | None, report: dict | None) -> str:
     """The role's own summary line when its report has one that can be
-    told from quoted text; otherwise the card's own sentence."""
+    told from quoted text; otherwise the board's own sentence."""
     if report and report["summary_line"]:
         return report["summary_line"]
     if latest is None:
@@ -346,7 +389,7 @@ def _is_capped(step: dict, report: dict | None) -> bool:
 
 
 def _may_say_none(phase, verdict, report: dict) -> bool:
-    """Whether the card may say this rated report has no findings. The
+    """Whether the board may say this rated report has no findings. The
     report must say so in the one section the reader took, with nothing
     else in the file that could be a second section or a row. And the
     verdict, which comes from the ledger and not from the report's body,
@@ -408,15 +451,15 @@ def _gate_findings(latest: dict | None, read: dict | None) -> dict:
         if report["rated"]:
             empty_message = _no_rows_message(phase, latest["verdict"], report)
         else:
-            empty_message = FINDINGS_ARE_IN_THE_REPORT if phase in _ROLES_WITH_FINDINGS else NO_FINDINGS
+            empty_message = FINDINGS_ARE_BELOW if phase in _ROLES_WITH_FINDINGS else NO_FINDINGS
     elif report["rated"] and not report["findings_complete"]:
         empty_message = ROWS_MAY_NOT_BE_ALL
     return {"groups": groups, "not_rated": not_rated, "empty_message": empty_message}
 
 
 def _capped_sentence(findings: dict) -> str:
-    """What the card says beside the capped label. It says Security found
-    nothing only when the card itself lists nothing from the report."""
+    """What the board says beside the capped label. It says Security found
+    nothing only when the board itself lists nothing from the report."""
     if findings["empty_message"] == NO_FINDINGS:
         return CAPPED_SENTENCE
     not_rated = findings["not_rated"] or {}
@@ -426,20 +469,121 @@ def _capped_sentence(findings: dict) -> str:
     return CAPPED_BUT_LISTS.format(findings="1 finding" if listed == 1 else f"{listed} findings")
 
 
+def _duration_words(seconds) -> str:
+    """"121 minutes", "1 minute" or "45 seconds"."""
+    if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 0:
+        return "a time Relay could not read"
+    if seconds < 60:
+        return "1 second" if seconds == 1 else f"{seconds} seconds"
+    minutes = seconds // 60
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
+
+
+def _time_limit_view(status: dict) -> dict:
+    """The view of a task a role's time limit stopped. The report the role
+    left is never read: the card names it and says it is not used."""
+    gate = status["gate"]
+    stop = gate["time_limit"]
+    if stop["report_left"]:
+        left = (f"A report was left; it is not used. Read it with: {settings._CLI_CMD} show "
+                f"{status['task']['task_id']} {stop['report']}")
+    else:
+        left = "No report was left."
+    return {"waiting": True,
+            "headline": f"The {role_title(stop['phase'])} ran past its time limit",
+            "ask": _ask(gate, status["retries"]),
+            "capped": None,
+            "relay_warning": None,
+            "arbiter_lines": [],
+            "findings": {"groups": [], "not_rated": None,
+                         "empty_message": (f"Limit: {_duration_words(stop['limit_seconds'])}. "
+                                           f"It ran for {_duration_words(stop['ran_seconds'])}. "
+                                           f"{left}")}}
+
+
+def _arbiter_findings(ruling: dict) -> dict:
+    """The findings of a gate the Arbiter's step stopped at: the follow-ups
+    and known flaws it recorded, each its own words."""
+    groups = []
+    for title, field in ((ARBITER_FOLLOW_UPS, "follow_ups"), (ARBITER_KNOWN_FLAWS, "known_flaws")):
+        items = [{"number": number, "statement": printable(text, QUOTED_LIMIT), "place": PLACE_NOT_GIVEN}
+                 for number, text in enumerate(ruling.get(field) or [], 1)]
+        if items:
+            groups.append({"severity": None, "title": title, "count": len(items), "items": items})
+    return {"groups": groups, "not_rated": None,
+            "empty_message": None if groups else ARBITER_NONE_RECORDED}
+
+
+def _relay_warning(gate: dict) -> str | None:
+    """At an escalation, Relay's own warnings (needs_owner_because) in one
+    line, so the owner never has only the Arbiter's framing to go on.
+    Other Arbiter gates already put them in the ask."""
+    because = (gate.get("arbiter") or {}).get("needs_owner_because")
+    if gate["kind"] != GATE_ARBITER_ESCALATION or not because:
+        return None
+    return RELAY_WARNS.format(because="; ".join(because))
+
+
+def _arbiter_lines(ruling: dict | None) -> list[str]:
+    """The Arbiter's reason, and its question at an escalation, labelled."""
+    if not ruling:
+        return []
+    lines = []
+    if ruling.get("reason"):
+        lines.append(ARBITER_REASON_LABEL + printable(ruling["reason"], QUOTED_LIMIT))
+    if ruling.get("question"):
+        lines.append(ARBITER_QUESTION_LABEL + printable(ruling["question"], QUOTED_LIMIT))
+    return lines
+
+
 def _view(status: dict, gate_read: dict | None, now: datetime) -> dict:
     gate, latest = status["gate"], status["latest_step"]
     gate_report = gate_read["report"] if gate_read else None
     if gate["state"] != GATE_WAITING_ON_OWNER:
         return {"waiting": False, "headline": _not_waiting_sentence(status, now),
-                "ask": None, "capped": None, "findings": None}
+                "ask": None, "capped": None, "findings": None, "relay_warning": None,
+                "arbiter_lines": []}
+    if gate["kind"] == GATE_TIME_LIMIT:
+        return _time_limit_view(status)
+    ruling = gate.get("arbiter")
     capped = latest is not None and _is_capped(latest, gate_report)
-    findings = _gate_findings(latest, gate_read)
+    findings = _arbiter_findings(ruling) if ruling else _gate_findings(latest, gate_read)
     return {"waiting": True,
             "headline": _gate_headline(latest, gate_report),
-            "ask": _ask(gate, status["retries"]),
+            "ask": _ask(gate, status["retries"], status.get("arbiter_rulings")),
             "capped": ({"label": CAPPED_LABEL, "sentence": _capped_sentence(findings)}
                        if capped else None),
+            "relay_warning": _relay_warning(gate),
+            "arbiter_lines": _arbiter_lines(ruling),
+            "sizing_lines": _sizing_lines(status),
             "findings": findings}
+
+
+# The most paths of one category the card shows at the unanswered gate.
+CARD_PATHS_PER_CATEGORY = 3
+
+
+def _since_the_last_approval(status: dict, timestamp) -> bool:
+    approvals = [approval["timestamp"] for approval in status.get("approvals") or []
+                 if approval.get("timestamp")]
+    return not approvals or (timestamp is not None and str(timestamp) > max(approvals))
+
+
+def _sizing_lines(status: dict) -> list[str]:
+    """What this gate shows of the sizing: each change, keep and refused
+    lowering since the owner's last approval and, where the Reviewer did not
+    answer the hint, the hint with a few of the branch's paths. Every
+    role's word and path leaves through printable (risk_record)."""
+    lines = [f"Sizing changed: {risk_record.change_line(entry)}"
+             for entry in (status.get("sizing_history") or [])[1:]
+             if _since_the_last_approval(status, entry.get("timestamp"))]
+    for judged in status.get("sizing_judgments") or []:
+        if _since_the_last_approval(status, judged.get("timestamp")):
+            lines += risk_record.judgment_lines(judged, with_unanswered=False)
+    if status["gate"]["kind"] == GATE_RISK_UNANSWERED:
+        lines.append(risk_hint.summary(status.get("risk_hint")))
+        lines += risk_record.hint_lines(status.get("risk_hint"), CARD_PATHS_PER_CATEGORY)
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -451,5 +595,6 @@ def gate_view(status: dict, now: datetime, reports: _Reports | None = None) -> d
     is made from."""
     latest = status["latest_step"]
     reports = reports or _Reports(status["task"]["task_id"])
-    gate_read = reports.get(latest["artifact"]) if latest else None
+    stopped = status["gate"]["kind"] == GATE_TIME_LIMIT
+    gate_read = reports.get(latest["artifact"]) if latest and not stopped else None
     return _view(status, gate_read, now)

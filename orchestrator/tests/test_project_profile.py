@@ -256,10 +256,10 @@ class TestLoadProfile:
 
 
 class TestAProfileRelayDoesNotRead:
-    """Hostile YAML in the reader of the worktree's profile, which `relay
-    profile` and Relay's test run use: the reader must not expand what a
-    small file asks it to, or raise errors of its own on a value it cannot
-    build."""
+    """Hostile YAML in the reader of the
+    worktree's profile, which `relay profile` and Relay's test run use:
+    YAML's whole loader expanded what a small file asked it to, and raised
+    errors of its own on a value it could not build."""
 
     REFUSED = "The profile could not be read as YAML: it "
 
@@ -334,7 +334,7 @@ class TestProfileCommand:
         payload = json.loads(captured.out)
         assert code == 0
         assert set(payload) == self.PAYLOAD_KEYS
-        assert (payload["schema"], payload["schema_version"], payload["ok"]) == ("relay.profile", 3, True)
+        assert (payload["schema"], payload["schema_version"], payload["ok"]) == ("relay.profile", 4, True)
         assert (payload["found"], payload["valid"]) == (True, True)
         assert payload["profile"] == FULL_PROFILE
         assert payload["profile_path"] == str(tmp_path / ".relay" / "profile.yaml")
@@ -390,7 +390,7 @@ class TestProfileCommand:
     ], ids=["YAML's error quotes them", "an unknown key's name holds them"])
     def test_plain_text_prints_each_problem_on_one_line_without_format_characters_and_capped(
             self, tmp_path, monkeypatch, capsys, written):
-        """In the worktree's profile, a right-to-left
+        """In the worktree's profile: a right-to-left
         override the profile holds could reorder a printed line."""
         write_profile(tmp_path, written)
         code, captured = self.run_main(monkeypatch, capsys, "profile", str(tmp_path))
@@ -453,3 +453,86 @@ class TestReportCheckSettings:
     def test_a_known_flaws_doc_outside_the_repo_is_refused(self, document):
         assert errors_for(profile_with(known_flaws_doc=document)) == [
             "known_flaws_doc must be a path inside the repo (no leading '/' and no '..')."]
+
+
+class TestTestRunSettings:
+    """`test_harness` and `test_clean_checkout`: how Relay's own run is guarded."""
+
+    def test_both_settings_are_accepted(self):
+        profile = profile_with(test_harness=["scripts/run-tests.sh", "*.testsettings"],
+                               test_clean_checkout=True)
+        assert check_profile(profile) == ([], [])
+
+    @pytest.mark.parametrize("entries", [
+        "scripts/run-tests.sh", [], [""], ["   "], ["a.sh", 3], [None], {"a": "b"}, True, None,
+    ], ids=["text, not a list", "an empty list", "an empty entry", "a blank entry",
+            "a number in the list", "a null in the list", "a mapping", "a boolean", "a null"])
+    def test_test_harness_of_the_wrong_type_is_refused(self, entries):
+        assert errors_for(profile_with(test_harness=entries)) == [
+            "test_harness must be a list of text names or patterns, one or more, such as scripts/run-tests.sh."]
+
+    @pytest.mark.parametrize("entry", ["/etc/passwd", "../other/run.sh", "a/../../b.sh"])
+    def test_test_harness_must_be_paths_inside_the_repo(self, entry):
+        assert errors_for(profile_with(test_harness=["ok.sh", entry])) == [
+            "test_harness entries must match paths inside the repo (no leading '/' and no '..')."]
+
+    def test_test_harness_may_not_be_too_long(self):
+        too_many = [f"file{number}.sh" for number in range(project_profile.MAX_TEST_HARNESS_ENTRIES + 1)]
+        assert errors_for(profile_with(test_harness=too_many)) == [
+            f"test_harness may list at most {project_profile.MAX_TEST_HARNESS_ENTRIES} entries."]
+        assert errors_for(profile_with(test_harness=too_many[:-1])) == []
+
+    @pytest.mark.parametrize("value", ["true", "yes", 1, 0, None, [True], {"on": True}])
+    def test_test_clean_checkout_must_be_true_or_false(self, value):
+        assert errors_for(profile_with(test_clean_checkout=value)) == [
+            "test_clean_checkout must be true or false."]
+
+    def test_test_clean_checkout_false_is_accepted(self):
+        assert errors_for(profile_with(test_clean_checkout=False)) == []
+
+    def test_a_repeated_key_reads_as_its_last_value(self, tmp_path):
+        """As every key does: YAML's loader keeps the last. A branch cannot
+        use this to turn clean mode off, because the base's true wins
+        (test_evidence_clean_checkout.py)."""
+        write_profile(tmp_path, "schema_version: 1\ncommands:\n  test: pytest\n"
+                                "test_clean_checkout: true\ntest_clean_checkout: false\n")
+        report = load_profile(tmp_path)
+        assert (report.valid, report.profile["test_clean_checkout"]) == (True, False)
+
+
+class TestRiskPaths:
+    """`risk_paths` adds patterns to the sizing hint's categories (risk_hint.py)."""
+
+    def test_risk_paths_valid_passes(self):
+        assert errors_for(profile_with(risk_paths={"auth": ["gatekeeper_*"],
+                                                   "deploy": ["ops/release/*"]})) == []
+
+    def test_risk_paths_unknown_category_is_an_error(self):
+        errors = errors_for(profile_with(risk_paths={"everything": ["*"], "auth": ["gate*"]}))
+        assert errors == [f"Unknown risk category 'everything' in risk_paths. Known categories: "
+                          f"{', '.join(project_profile.RISK_CATEGORIES)}."]
+
+    def test_an_unknown_category_with_control_characters_is_shown_printable(self):
+        errors = errors_for(profile_with(risk_paths={"au\x1b[2Jth": ["*"]}))
+        assert len(errors) == 1 and "\x1b" not in errors[0]
+
+    @pytest.mark.parametrize("patterns", [
+        [], "gate*", [1], [""], ["   "], ["a" * 201], ["two\nlines"], ["nul\0"],
+        [f"p{number}" for number in range(51)], None, {"a": "b"},
+    ])
+    def test_risk_paths_entries_must_be_short_text(self, patterns):
+        assert errors_for(profile_with(risk_paths={"auth": patterns})) == [
+            "risk_paths.auth must be a list of 1 to 50 path patterns, each text of at most 200 "
+            "characters on one line."]
+
+    @pytest.mark.parametrize("risk_paths", [["auth"], "auth", 3, None])
+    def test_risk_paths_must_be_a_mapping(self, risk_paths):
+        errors = errors_for(profile_with(risk_paths=risk_paths))
+        assert len(errors) == 1 and errors[0].startswith("risk_paths must be a mapping")
+
+    def test_relay_profile_reports_an_unknown_category(self, tmp_path):
+        write_profile(tmp_path, "schema_version: 1\ncommands:\n  test: pytest\n"
+                                "risk_paths:\n  money: ['*cash*']\n")
+        report = load_profile(tmp_path)
+        assert not report.valid
+        assert any("Unknown risk category 'money'" in error for error in report.errors)

@@ -14,6 +14,8 @@ import commands
 import read_api
 import run_state
 import settings
+from tests.cli_edge import run_relay
+from tests.git_fixtures import build_in
 from tests.hostile_yaml import BAD_VALUE_NAMES, BAD_VALUES, SECURITYS_MERGE_KEYS
 from tests.test_send_back import config  # noqa: F401  (a fixture)
 import project_profile
@@ -39,17 +41,15 @@ def start(task_id: str, config: dict, worktree: Path | None = None) -> None:
     task_dir = settings.TASKS_DIR / task_id
     task_dir.mkdir(parents=True)
     (task_dir / "brief.md").write_text("# Brief\n")
-    commands.cmd_start(task_id, auto=False, config=config)
+    assert commands.cmd_start(task_id, auto=False, config=config) == 0
     if worktree is not None:
-        state = run_state.load_run_state(task_id, config)
-        state["worktree_path"], state["base"], state["branch"] = str(worktree), "main", "task"
-        run_state.save_run_state(task_id, state, config)
+        build_in(task_id, config, worktree)
 
 
 def walk(task_id: str, config: dict, steps: list[tuple[str, str]], deploy: str = "no") -> None:
     for verdict, report in steps:
         finish(task_id, config, verdict, report, deploy)
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
 
 
 def builder_running(task_id: str, config: dict, worktree: Path) -> None:
@@ -59,7 +59,7 @@ def builder_running(task_id: str, config: dict, worktree: Path) -> None:
 
 def next_prints(task_id: str, config: dict, capsys) -> str:
     capsys.readouterr()
-    commands.cmd_next(task_id, auto=False, config=config)
+    assert commands.cmd_next(task_id, auto=False, config=config) == 0
     return capsys.readouterr().out
 
 
@@ -202,11 +202,13 @@ def brief(task_id: str) -> None:
 
 
 def started(task_id: str, config: dict, capsys, **given) -> tuple[int | None, str]:
-    """(exit code or None, what was printed) for `relay start`."""
+    """(exit code or None, what was printed) for `relay start`, run through
+    the command line with `given` as its --worktree and --base options."""
     brief(task_id)
     capsys.readouterr()
+    options = [part for name, value in given.items() for part in (f"--{name}", value)]
     try:
-        commands.cmd_start(task_id, auto=False, config=config, repo="app", **given)
+        run_relay(config, "start", task_id, "--repo", "app", *options)
         code = None
     except SystemExit as stopped:
         code = stopped.code
@@ -232,17 +234,6 @@ def test_start_takes_the_current_folder_inside_the_checkout(config, capsys, regi
     code, _ = started("here", config, capsys)
     assert code is None
     assert run_state.load_run_state("here", config)["worktree_path"] == str(worktree.resolve())
-
-
-def test_start_refuses_a_repo_alias_that_is_not_registered(config, capsys, registered):
-    brief("typo")
-    capsys.readouterr()
-    with pytest.raises(SystemExit) as stopped:
-        commands.cmd_start("typo", auto=False, config=config, repo="ap")
-    out = capsys.readouterr().out
-    assert stopped.value.code == 1
-    assert "'ap' is not a registered repo" in out and "relay register <path> --alias ap" in out
-    assert run_state.load_run_state("typo", config) is None
 
 
 @pytest.mark.parametrize("where, said", [

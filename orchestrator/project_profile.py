@@ -6,9 +6,9 @@ details, the CLIs it needs, and its secrets by name and location only.
 
 This module only reads and checks a profile. It never runs a command from
 one (evidence.py runs the test command); it asks git one question, whether
-the test report is ignored. Checking is strict on purpose: a misspelt key
-is an error, not a silently ignored line, because the roles act on what
-the profile says.
+the test report is ignored. Checking is strict on purpose: a misspelt key is an error, not a
+silently ignored line, because the roles and (later) the gatekeeper act on
+what the profile says.
 
 The field reference is docs/profile.md; templates/profile.yaml is a starter.
 """
@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 import yaml
 
 import bounded_yaml
+from printable import printable
 
 PROFILE_RELATIVE_PATH = Path(".relay") / "profile.yaml"
 PROFILE_SCHEMA_VERSION = 1
@@ -35,7 +36,8 @@ NOT_READ = "The profile could not be read as YAML"
 
 TOP_LEVEL_KEYS = {"schema_version", "platforms", "commands", "test_report", "flaky_check_runs", "required_clis",
                   "deploy_targets", "stores", "secrets", "security_test_targets", "observability",
-                  "test_files", "known_flaws_doc"}
+                  "test_files", "known_flaws_doc", "test_harness", "test_clean_checkout",
+                  "risk_paths"}
 COMMAND_NAMES = {"test", "build", "lint", "audit", "start"}
 REQUIRED_CLI_KEYS = {"name", "check"}
 DEPLOY_TARGET_KEYS = {"name", "platform", "command", "requires_cli", "smoke", "rollback",
@@ -43,6 +45,24 @@ DEPLOY_TARGET_KEYS = {"name", "platform", "command", "requires_cli", "smoke", "r
 STORE_KEYS = {"platform", "app_id", "track", "release_script"}
 SECRET_KEYS = {"name", "location"}
 SECURITY_TEST_TARGET_KEYS = {"name", "url"}
+# The most entries a profile's test_harness list may have.
+MAX_TEST_HARNESS_ENTRIES = 200
+# The risk categories of Relay's sizing hint (risk_hint.py), each with its
+# words. A profile's `risk_paths` may add patterns to any of them.
+RISK_CATEGORY_WORDS = {
+    "auth": "auth",
+    "input": "input handling",
+    "payments": "money or payments",
+    "schema": "migrations or schema",
+    "production_data": "production data",
+    "secrets": "secrets",
+    "deploy": "deploy config",
+}
+RISK_CATEGORIES = tuple(RISK_CATEGORY_WORDS)
+# The most patterns a profile's risk_paths may add to one category, and the
+# longest one.
+MAX_RISK_PATTERNS = 50
+MAX_RISK_PATTERN_CHARACTERS = 200
 # Where a secret lives: a macOS Keychain item, a KeePass entry, or an
 # environment variable. Never the value itself.
 SECRET_LOCATION_SCHEMES = ("keychain:", "keepass:", "env:")
@@ -151,6 +171,9 @@ def check_profile(data) -> tuple[list[str], list[str]]:
     _check_observability(data.get("observability"), errors)
     _check_test_files(data, errors)
     _check_known_flaws_doc(data, errors)
+    _check_test_harness(data, errors)
+    _check_test_clean_checkout(data, errors)
+    check_risk_paths(data, errors)
     return errors, warnings
 
 
@@ -215,9 +238,8 @@ def _is_inside_the_repo(relative: str) -> bool:
 
 
 def _check_test_files(data: dict, errors: list[str]) -> None:
-    """Which files are tests: patterns for paths inside the repo. Older
-    versions of Relay read this; it is still accepted so a profile that has
-    it stays valid, and nothing reads it now."""
+    """Which files are tests: patterns for paths inside the repo. Accepted
+    so a profile that has it stays valid; nothing reads it."""
     if "test_files" not in data:
         return
     patterns = data["test_files"]
@@ -231,7 +253,7 @@ def _check_test_files(data: dict, errors: list[str]) -> None:
 
 def _check_known_flaws_doc(data: dict, errors: list[str]) -> None:
     """The document that lists the project's known flaws: a path inside
-    the repo. Accepted and no longer read, like test_files."""
+    the repo. Accepted and not read, like test_files."""
     if "known_flaws_doc" not in data:
         return
     document = data["known_flaws_doc"]
@@ -240,6 +262,60 @@ def _check_known_flaws_doc(data: dict, errors: list[str]) -> None:
         return
     if not _is_inside_the_repo(document):
         errors.append("known_flaws_doc must be a path inside the repo (no leading '/' and no '..').")
+
+
+def _check_test_harness(data: dict, errors: list[str]) -> None:
+    """Extra files that make up the test harness: names or patterns for
+    paths inside the repo. Relay reads them from the base's profile, so a
+    branch cannot take a file off the list for its own run."""
+    if "test_harness" not in data:
+        return
+    entries = data["test_harness"]
+    if not isinstance(entries, list) or not entries or not all(_is_text(item) for item in entries):
+        errors.append("test_harness must be a list of text names or patterns, one or more, "
+                      "such as scripts/run-tests.sh.")
+        return
+    if len(entries) > MAX_TEST_HARNESS_ENTRIES:
+        errors.append(f"test_harness may list at most {MAX_TEST_HARNESS_ENTRIES} entries.")
+    if not all(_is_inside_the_repo(entry) for entry in entries):
+        errors.append("test_harness entries must match paths inside the repo "
+                      "(no leading '/' and no '..').")
+
+
+def check_risk_paths(data: dict, errors: list[str]) -> None:
+    """Patterns the profile adds to the sizing hint's risk categories:
+    a mapping of category to a list of 1 to MAX_RISK_PATTERNS short text
+    patterns. Additions only: Relay reads them from the base's profile and
+    adds them to its defaults, which nothing can remove."""
+    if "risk_paths" not in data:
+        return
+    risk_paths = data["risk_paths"]
+    if not isinstance(risk_paths, dict):
+        errors.append(f"risk_paths must be a mapping of risk category to a list of path patterns; "
+                      f"the categories are {', '.join(RISK_CATEGORIES)}.")
+        return
+    for category in risk_paths:
+        if category not in RISK_CATEGORIES:
+            errors.append(f"Unknown risk category '{printable(category, 60)}' in risk_paths. "
+                          f"Known categories: {', '.join(RISK_CATEGORIES)}.")
+            continue
+        patterns = risk_paths[category]
+        if (not isinstance(patterns, list) or not 1 <= len(patterns) <= MAX_RISK_PATTERNS
+                or not all(_is_risk_pattern(pattern) for pattern in patterns)):
+            errors.append(f"risk_paths.{category} must be a list of 1 to {MAX_RISK_PATTERNS} "
+                          f"path patterns, each text of at most {MAX_RISK_PATTERN_CHARACTERS} "
+                          "characters on one line.")
+
+
+def _is_risk_pattern(pattern) -> bool:
+    return (_is_text(pattern) and len(pattern) <= MAX_RISK_PATTERN_CHARACTERS
+            and not any(character in pattern for character in "\0\n\r"))
+
+
+def _check_test_clean_checkout(data: dict, errors: list[str]) -> None:
+    """Whether Relay runs the tests in a fresh checkout: true or false."""
+    if "test_clean_checkout" in data and not isinstance(data["test_clean_checkout"], bool):
+        errors.append("test_clean_checkout must be true or false.")
 
 
 def _check_flaky_check_runs(runs, errors: list[str]) -> None:

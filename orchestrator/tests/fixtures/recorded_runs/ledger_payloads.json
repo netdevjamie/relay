@@ -1,0 +1,29 @@
+{
+  "test_runs": [
+    {
+      "name": "passed-with-counts",
+      "payload": "{\"outcome\": \"passed\", \"reason\": null, \"commit\": \"25424c6996878074b892fede98d69b7b6546bfba\", \"command\": \"cd orchestrator && python3 -m pytest tests/ ../tools/tests -q --junitxml=../test-results/junit.xml\", \"test_report\": \"test-results/junit.xml\", \"command_differs_from_base\": false, \"base_command\": \"cd orchestrator && python3 -m pytest tests/ ../tools/tests -q --junitxml=../test-results/junit.xml\", \"base_profile_unread\": null, \"exit_code\": 0, \"duration_seconds\": 49.1, \"counts\": {\"tests\": 1437, \"failures\": 0, \"errors\": 0, \"skipped\": 0}, \"log\": \"03-test-run.log\"}"
+    },
+    {
+      "name": "changed-command",
+      "payload": "{\"outcome\": \"passed\", \"reason\": null, \"commit\": \"e928f5323365a11b06c3d95cb89a8d7ef571137c\", \"command\": \"node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-report.junit.xml \\\"tests/*.test.mjs\\\"\", \"test_report\": \"test-report.junit.xml\", \"command_differs_from_base\": true, \"base_command\": null, \"base_profile_unread\": null, \"exit_code\": 0, \"duration_seconds\": 0.3, \"counts\": null, \"log\": \"27-test-run.log\"}"
+    },
+    {
+      "name": "failed",
+      "payload": "{\"outcome\": \"failed\", \"reason\": null, \"commit\": \"a814fcba9027df55c22db9b964eb92cff612dda3\", \"command\": \"bash scripts/relay-test.sh\", \"test_report\": null, \"command_differs_from_base\": false, \"base_command\": \"bash scripts/relay-test.sh\", \"base_profile_unread\": null, \"exit_code\": 1, \"duration_seconds\": 2376.7, \"counts\": null, \"log\": \"30-test-run.log\"}"
+    },
+    {
+      "name": "timed-out",
+      "payload": "{\"outcome\": \"timed_out\", \"reason\": \"The test command was stopped after 1800 seconds.\", \"commit\": \"ff595fff6eaa109768662ded88321cded172e257\", \"command\": \"bash scripts/relay-test.sh\", \"test_report\": null, \"command_differs_from_base\": false, \"base_command\": \"bash scripts/relay-test.sh\", \"base_profile_unread\": null, \"exit_code\": null, \"duration_seconds\": 1800.0, \"counts\": null, \"log\": \"24-test-run.log\"}"
+    },
+    {
+      "name": "uncommitted",
+      "payload": "{\"outcome\": \"uncommitted\", \"reason\": \"Not committed: db/prod/tests/test_prod_tooling.py. Commit the work (or ignore generated files) first.\", \"commit\": \"de871703e49eafe3a3580a55e72068271c55f6ea\", \"command\": \"bash scripts/relay-test.sh\", \"test_report\": null, \"command_differs_from_base\": false, \"base_command\": \"bash scripts/relay-test.sh\", \"base_profile_unread\": null, \"exit_code\": null, \"duration_seconds\": null, \"counts\": null, \"log\": null}"
+    },
+    {
+      "name": "not-run",
+      "payload": "{\"outcome\": \"not_run\", \"reason\": \"The repo has no project profile, so Relay has no test command to run.\", \"commit\": \"f0a2fca75251b0285af1fa94d4afd8b42ebc7621\", \"command\": null, \"test_report\": null, \"command_differs_from_base\": false, \"base_command\": null, \"base_profile_unread\": null, \"exit_code\": null, \"duration_seconds\": null, \"counts\": null, \"log\": null}"
+    }
+  ],
+  "accepted": "{\"command\": \"node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-report.junit.xml \\\"tests/*.test.mjs\\\"\", \"test_report\": \"test-report.junit.xml\", \"commit\": \"762c56d07b235fe9d5a60fbe35d16a5720accf35\"}"
+}

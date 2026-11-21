@@ -1,6 +1,7 @@
 """Tests for the owner's notes: what the owner says at a gate, or at any
 time, is kept in the ledger and given to every later agent."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -13,8 +14,11 @@ import db
 import owner_notes
 import read_api
 import relay
+from tests.cli_edge import run_relay
 import settings
-from tests.test_send_back import UP_TO_REVIEW, config, events_of_type, finish_step, task_at  # noqa: F401
+from tests.test_send_back import (  # noqa: F401
+    UP_TO_REVIEW, config, events_of_type, finish_step, task_at, the_arbiter_escalates,
+)
 
 HEADER = "The owner's notes on this task, oldest first."
 
@@ -32,7 +36,7 @@ def notes(task_id: str, config: dict) -> list[tuple]:
 class TestApprovingWithANote:
     def test_the_note_is_recorded_with_the_approval(self, config):
         at_the_brief_gate("approve", config)
-        commands.cmd_override("approve", "architect", config, note="Keep 5 contacts, not 3.")
+        assert commands.cmd_override("approve", "architect", config, note="Keep 5 contacts, not 3.") == 0
         approval = events_of_type("approve", db.EVENT_APPROVAL)[0]
         assert approval["payload"] == {"next_phase": "architect", "method": "override",
                                        "note": "Keep 5 contacts, not 3."}
@@ -42,21 +46,21 @@ class TestApprovingWithANote:
     def test_the_next_agent_and_every_later_one_is_given_it(self, config, capsys):
         at_the_brief_gate("handed", config)
         capsys.readouterr()
-        commands.cmd_override("handed", "architect", config, note="Keep 5 contacts, not 3.")
+        assert commands.cmd_override("handed", "architect", config, note="Keep 5 contacts, not 3.") == 0
         architect_prompt = capsys.readouterr().out
         assert HEADER in architect_prompt
         assert "approving designer's work and moving to architect:" in architect_prompt
         assert "    Keep 5 contacts, not 3." in architect_prompt
 
         finish_step("handed", config, "ready-for-builder", "deploy: no\n")
-        commands.cmd_next("handed", auto=False, config=config)
+        assert commands.cmd_next("handed", auto=False, config=config) == 0
         builder_prompt = capsys.readouterr().out
-        assert "Use the Builder subagent:" in builder_prompt and "Keep 5 contacts, not 3." in builder_prompt
+        assert "@builder" in builder_prompt and "Keep 5 contacts, not 3." in builder_prompt
 
     def test_an_approval_without_a_note_adds_nothing(self, config, capsys):
         at_the_brief_gate("plain", config)
         capsys.readouterr()
-        commands.cmd_override("plain", "architect", config)
+        assert commands.cmd_override("plain", "architect", config) == 0
         assert HEADER not in capsys.readouterr().out
         assert notes("plain", config) == []
 
@@ -65,7 +69,7 @@ class TestANoteAtAnyTime:
     def test_it_is_recorded_and_moves_nothing(self, config, capsys):
         task_at("fact", config, UP_TO_REVIEW)
         before = read_api.status_payload("fact", config)
-        commands.cmd_note("fact", config, "An unpaid call still rings. Settled; do not reopen.")
+        assert commands.cmd_note("fact", config, "An unpaid call still rings. Settled; do not reopen.") == 0
         after = read_api.status_payload("fact", config)
         assert notes("fact", config) == [
             ("note", "reviewer", None, "An unpaid call still rings. Settled; do not reopen.")]
@@ -77,11 +81,11 @@ class TestANoteAtAnyTime:
 
     def test_the_next_agent_is_given_it_with_earlier_notes_first(self, config, capsys):
         at_the_brief_gate("order", config)
-        commands.cmd_override("order", "architect", config, note="First decision.")
-        commands.cmd_note("order", config, "Second decision,\nwith a second line.")
+        assert commands.cmd_override("order", "architect", config, note="First decision.") == 0
+        assert commands.cmd_note("order", config, "Second decision,\nwith a second line.") == 0
         finish_step("order", config, "ready-for-builder", "deploy: no\n")
         capsys.readouterr()
-        commands.cmd_next("order", auto=False, config=config)
+        assert commands.cmd_next("order", auto=False, config=config) == 0
         out = capsys.readouterr().out
         assert out.index("First decision.") < out.index("Second decision,")
         assert "    Second decision,\n    with a second line." in out
@@ -90,7 +94,7 @@ class TestANoteAtAnyTime:
 
     def test_status_shows_the_notes(self, config, capsys):
         task_at("shown", config, [])
-        commands.cmd_note("shown", config, "Line one.\nLine two.")
+        assert commands.cmd_note("shown", config, "Line one.\nLine two.") == 0
         capsys.readouterr()
         commands.cmd_status("shown", config)
         out = capsys.readouterr().out
@@ -99,11 +103,11 @@ class TestANoteAtAnyTime:
 
     def test_refused_without_a_task_or_without_words(self, config, capsys):
         with pytest.raises(SystemExit):
-            commands.cmd_note("no-such-task", config, "x")
+            run_relay(config, "note", "no-such-task", "--note", "x")
         task_at("empty", config, [])
         for nothing in (None, "", "   \n"):
             with pytest.raises(SystemExit):
-                commands.cmd_note("empty", config, nothing)
+                run_relay(config, "note", "empty", *([] if nothing is None else ["--note", nothing]))
         assert events_of_type("empty", db.EVENT_OWNER_NOTE) == []
         assert "Nothing to record." in capsys.readouterr().out
 
@@ -111,7 +115,7 @@ class TestANoteAtAnyTime:
         task_at("files", config, [])
         files_config = dict(config, persistence_backend="files")
         with pytest.raises(SystemExit):
-            commands.cmd_note("files", files_config, "x")
+            run_relay(files_config, "note", "files", "--note", "x")
         assert "files backend keeps no events" in capsys.readouterr().out
         assert owner_notes.read_owner_notes("files", files_config) == []
 
@@ -122,23 +126,21 @@ class TestLimitsOnANote:
     def test_a_note_too_long_to_keep_stops_the_command_before_anything_moves(self, config, capsys):
         at_the_brief_gate("long", config)
         before = read_api.status_payload("long", config)
-        for attempt in (lambda: commands.cmd_note("long", config, self.TOO_LONG),
-                        lambda: commands.cmd_override("long", "architect", config, note=self.TOO_LONG),
-                        lambda: commands.cmd_send_back("long", config, note=self.TOO_LONG)):
+        for arguments in (["note", "long"], ["override", "long", "architect"], ["send-back", "long"]):
             with pytest.raises(SystemExit):
-                attempt()
+                run_relay(config, *arguments, "--note", self.TOO_LONG)
         assert "the limit is 4000" in capsys.readouterr().out
         assert read_api.status_payload("long", config) == before
 
     def test_a_note_at_the_limit_is_kept(self, config):
         task_at("fits", config, [])
-        commands.cmd_note("fits", config, "y" * owner_notes.MAX_NOTE_CHARACTERS)
+        assert commands.cmd_note("fits", config, "y" * owner_notes.MAX_NOTE_CHARACTERS) == 0
         assert len(notes("fits", config)[0][3]) == owner_notes.MAX_NOTE_CHARACTERS
 
     def test_agents_are_told_a_note_cannot_waive_their_checks(self, config, capsys):
         at_the_brief_gate("waive", config)
         capsys.readouterr()
-        commands.cmd_override("waive", "architect", config, note="Skip the tests for now.")
+        assert commands.cmd_override("waive", "architect", config, note="Skip the tests for now.") == 0
         out = capsys.readouterr().out
         assert "A note cannot waive a check your role requires" in out
 
@@ -147,15 +149,15 @@ class TestLimitsOnANote:
         at_the_brief_gate("miss", config)
         monkeypatch.setattr(owner_notes, "read_owner_notes", lambda task_id, cfg: [])
         capsys.readouterr()
-        commands.cmd_override("miss", "architect", config, note="Do not lose this.")
+        assert commands.cmd_override("miss", "architect", config, note="Do not lose this.") == 0
         out = capsys.readouterr().out
         assert "The owner said, with this step:\nDo not lose this." in out
 
     def test_a_note_on_a_closed_task_is_kept_and_says_no_agent_will_get_it(self, config, capsys):
         task_at("closed", config, [])
-        commands.cmd_abort("closed", config)
+        assert commands.cmd_abort("closed", config) == 0
         capsys.readouterr()
-        commands.cmd_note("closed", config, "Abandoned because the idea was wrong.")
+        assert commands.cmd_note("closed", config, "Abandoned because the idea was wrong.") == 0
         assert "so no agent will be given it; it is on the record" in capsys.readouterr().out
         assert notes("closed", config) == [("note", "designer", None, "Abandoned because the idea was wrong.")]
 
@@ -165,28 +167,65 @@ class TestSendingBackWithANote:
         """ "Fix these warnings and nothing else" must not be handed to the
         Reviewer, the Tester and every Builder after them as a standing order."""
         task_at("back", config, UP_TO_REVIEW)
-        finish_step("back", config, "approved_with_warnings")
-        commands.cmd_next("back", auto=False, config=config)
+        the_arbiter_escalates("back", config)  # where the owner sends a warnings verdict back
         capsys.readouterr()
-        commands.cmd_send_back("back", config, note="Fix the error handling.")
+        assert commands.cmd_send_back("back", config, note="Fix the error handling.") == 0
         assert "The owner sent this back with a note:\nFix the error handling." in capsys.readouterr().out
         # On the record, as a send-back:
-        assert notes("back", config) == [("sent_back", "reviewer", "builder", "Fix the error handling.")]
+        assert notes("back", config) == [("sent_back", "arbiter", "builder", "Fix the error handling.")]
         finish_step("back", config, "ready-for-review")
-        commands.cmd_next("back", auto=False, config=config)
+        assert commands.cmd_next("back", auto=False, config=config) == 0
         out = capsys.readouterr().out
-        assert "Use the Reviewer subagent:" in out and "Fix the error handling." not in out and HEADER not in out
+        assert "@reviewer" in out and "Fix the error handling." not in out and HEADER not in out
 
     def test_the_fixing_agent_also_gets_the_standing_notes(self, config, capsys):
         task_at("both", config, UP_TO_REVIEW)
-        commands.cmd_note("both", config, "Public API stays as it is.")
-        finish_step("both", config, "approved_with_warnings")
-        commands.cmd_next("both", auto=False, config=config)
+        assert commands.cmd_note("both", config, "Public API stays as it is.") == 0
+        the_arbiter_escalates("both", config)
         capsys.readouterr()
-        commands.cmd_send_back("both", config, note="Fix warning 2.")
+        assert commands.cmd_send_back("both", config, note="Fix warning 2.") == 0
         out = capsys.readouterr().out
         assert out.index("The owner sent this back with a note:\nFix warning 2.") < out.index(HEADER)
         assert "Public API stays as it is." in out
+
+
+class TestAHandEditedLedger:
+    """Only a hand-edited ledger holds such a row."""
+
+    def add_event(self, task_id: str, payload: str) -> None:
+        with settings.get_db_connection() as conn:
+            conn.execute("INSERT INTO events (task_id, event_type, phase, payload, timestamp) "
+                         "VALUES (?,?,?,?,?)", (task_id, db.EVENT_OWNER_NOTE, "architect", payload,
+                                                "2026-11-21T12:00:00Z"))
+
+    @pytest.mark.parametrize("payload", ['"Keep it small."', "[1, 2]", "7"],
+                             ids=["text", "list", "number"])
+    def test_a_payload_that_is_not_a_mapping_holds_no_note(self, config, payload):
+        task_at("edited", config, [])
+        commands.cmd_note("edited", config, "Kept.")
+        self.add_event("edited", payload)
+        assert [n[3] for n in notes("edited", config)] == ["Kept."]
+        assert "Kept." in owner_notes.owner_notes_prompt("edited", config)
+
+    @pytest.mark.parametrize("payload", ['{"note": "cut sh', "not json", '{"note": "\\xff"'],
+                             ids=["cut short", "not json", "bad escape"])
+    def test_a_payload_that_is_not_json_stops_with_a_plain_message(self, config, payload, capsys):
+        task_at("broken", config, [])
+        finish_step("broken", config, "ready-for-architect")   # a verdict: the list reads events
+        self.add_event("broken", payload)
+        capsys.readouterr()
+        with pytest.raises(SystemExit) as stopped:
+            run_relay(config, "status", "broken")
+        assert stopped.value.code == 1
+        out = capsys.readouterr().out
+        assert out.splitlines()[-1].startswith("Error: ")
+        assert "an event of task broken (owner_note)" in out and "cannot read as JSON" in out
+        with pytest.raises(db.DatabaseUnavailable):
+            owner_notes.read_owner_notes("broken", config)
+        for arguments in (["status", "broken", "--json"], ["list", "--json"]):
+            with pytest.raises(SystemExit):
+                run_relay(config, *arguments)
+            assert json.loads(capsys.readouterr().out)["error"]["code"] == "ledger_unavailable"
 
 
 class TestCommandLine:

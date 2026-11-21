@@ -1,0 +1,6103 @@
+[
+ {
+  "action": "start",
+  "dispatched": [
+   "01-designer.md"
+  ],
+  "events": [
+   {
+    "event_type": "task_created",
+    "phase": "designer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "sized",
+    "payload": {
+     "deploy": null,
+     "note": "the brief does not give size: fix|feature|project or risky: yes|no, so the full chain runs",
+     "risky": true,
+     "size": "project"
+    },
+    "phase": null,
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "designer",
+      "designer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "designer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [],
+   "current_phase": "designer",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from designer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "01-designer.md",
+    "artifact_path": "<TMP>/tasks/golden/01-designer.md",
+    "phase": "designer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 1,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 0
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: designer\nnext_step: 2\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: false\nretries:\n  builder: 0\n  reviewer: 0\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 0,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    },
+    "steps": [],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from designer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "01-designer.md",
+    "artifact_path": "<TMP>/tasks/golden/01-designer.md",
+    "phase": "designer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 1,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [],
+   "retries": {
+    "builder": 0,
+    "reviewer": 0
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "designer",
+    "deploy_intent": false,
+    "next_step": 2,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "designer ready-for-architect",
+  "dispatched": [
+   "02-architect.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "designer",
+    "step": 1,
+    "timestamp": "<T>",
+    "verdict": "ready-for-architect"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "designer",
+      "designer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "designer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "designer",
+      "architect"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "architect",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [],
+   "current_phase": "architect",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from architect yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "02-architect.md",
+    "artifact_path": "<TMP>/tasks/golden/02-architect.md",
+    "phase": "architect",
+    "recorded": false,
+    "started": "<T>",
+    "step": 2,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 0
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: architect\nnext_step: 3\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: false\nretries:\n  builder: 0\n  reviewer: 0\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 0,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    },
+    "steps": [],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from architect yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "02-architect.md",
+    "artifact_path": "<TMP>/tasks/golden/02-architect.md",
+    "phase": "architect",
+    "recorded": false,
+    "started": "<T>",
+    "step": 2,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [],
+   "retries": {
+    "builder": 0,
+    "reviewer": 0
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "architect",
+    "deploy_intent": false,
+    "next_step": 3,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "architect ready-for-builder, deploy yes",
+  "dispatched": [],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "architect",
+    "step": 2,
+    "timestamp": "<T>",
+    "verdict": "ready-for-builder"
+   },
+   {
+    "event_type": "deploy_decided",
+    "payload": {
+     "decided": true,
+     "previous": false,
+     "source": "architect"
+    },
+    "phase": "architect",
+    "step": 2,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "architect",
+      "architect"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "architect",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [],
+   "current_phase": "architect",
+   "gate": {
+    "approve_command": "relay override golden builder",
+    "kind": "approval",
+    "next_phase": "builder",
+    "reason": "architect verdict: ready-for-builder, requires human approval to proceed",
+    "send_back_command": "relay send-back golden",
+    "send_back_recommended": false,
+    "state": "waiting_on_owner"
+   },
+   "latest_step": {
+    "artifact": "02-architect.md",
+    "artifact_path": "<TMP>/tasks/golden/02-architect.md",
+    "phase": "architect",
+    "recorded": true,
+    "started": "<T>",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 0
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: architect\nnext_step: 3\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 0\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n\n",
+  "status": {
+   "approvals": [],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 0,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    },
+    "steps": [],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": "relay override golden builder",
+    "kind": "approval",
+    "next_phase": "builder",
+    "reason": "architect verdict: ready-for-builder, requires human approval to proceed",
+    "send_back_command": "relay send-back golden",
+    "send_back_recommended": false,
+    "state": "waiting_on_owner"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "02-architect.md",
+    "artifact_path": "<TMP>/tasks/golden/02-architect.md",
+    "phase": "architect",
+    "recorded": true,
+    "started": "<T>",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [],
+   "retries": {
+    "builder": 0,
+    "reviewer": 0
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "architect",
+    "deploy_intent": true,
+    "next_step": 3,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   }
+  ]
+ },
+ {
+  "action": "override builder with a note",
+  "dispatched": [
+   "03-builder.md"
+  ],
+  "events": [
+   {
+    "event_type": "approval",
+    "payload": {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead."
+    },
+    "phase": "architect",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "architect",
+      "builder"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "builder",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "builder",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "03-builder.md",
+    "artifact_path": "<TMP>/tasks/golden/03-builder.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 3,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 0
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: builder\nnext_step: 4\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 0\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 0,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 1
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "03-builder.md",
+    "artifact_path": "<TMP>/tasks/golden/03-builder.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 3,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 0
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "builder",
+    "deploy_intent": true,
+    "next_step": 4,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "builder ready-for-review",
+  "dispatched": [
+   "04-reviewer.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "builder",
+    "step": 3,
+    "timestamp": "<T>",
+    "verdict": "ready-for-review"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "builder",
+      "builder"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "builder",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "test_run",
+    "payload": {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed"
+    },
+    "phase": "builder",
+    "step": 3,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "builder",
+      "reviewer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "reviewer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "reviewer",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from reviewer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "04-reviewer.md",
+    "artifact_path": "<TMP>/tasks/golden/04-reviewer.md",
+    "phase": "reviewer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 4,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 0
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: reviewer\nnext_step: 5\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 0\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 0,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 0
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 0,
+     "review_loop_by_role": {
+      "reviewer": 0,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 0
+     },
+     "total": 1
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from reviewer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "04-reviewer.md",
+    "artifact_path": "<TMP>/tasks/golden/04-reviewer.md",
+    "phase": "reviewer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 4,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 0
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "reviewer",
+    "deploy_intent": true,
+    "next_step": 5,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "reviewer changes_requested",
+  "dispatched": [
+   "05-builder-fix-1.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "reviewer",
+    "step": 4,
+    "timestamp": "<T>",
+    "verdict": "changes_requested"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "reviewer",
+      "reviewer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "reviewer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "reviewer",
+      "builder"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "builder",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "retry",
+    "phase": "builder",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "builder",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "05-builder-fix-1.md",
+    "artifact_path": "<TMP>/tasks/golden/05-builder-fix-1.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 5,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 1,
+   "reviewer": 0
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: builder\nnext_step: 6\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 1\n  reviewer: 0\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 1,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 1
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 2
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "05-builder-fix-1.md",
+    "artifact_path": "<TMP>/tasks/golden/05-builder-fix-1.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 5,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 1,
+    "reviewer": 0
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "builder",
+    "deploy_intent": true,
+    "next_step": 6,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "a reviewer retry from an older ledger",
+  "dispatched": [],
+  "events": [
+   {
+    "event_type": "retry",
+    "phase": "reviewer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "builder",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "05-builder-fix-1.md",
+    "artifact_path": "<TMP>/tasks/golden/05-builder-fix-1.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 5,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 1,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: builder\nnext_step: 6\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 1\n  reviewer: 0\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 1,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 1
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 2
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "05-builder-fix-1.md",
+    "artifact_path": "<TMP>/tasks/golden/05-builder-fix-1.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 5,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 1,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "builder",
+    "deploy_intent": true,
+    "next_step": 6,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "builder fix ready-for-review",
+  "dispatched": [
+   "06-reviewer-pass-2.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "builder",
+    "step": 5,
+    "timestamp": "<T>",
+    "verdict": "ready-for-review"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "builder",
+      "builder"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "builder",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "test_run",
+    "payload": {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed"
+    },
+    "phase": "builder",
+    "step": 5,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "builder",
+      "reviewer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "reviewer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "reviewer",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from reviewer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "06-reviewer-pass-2.md",
+    "artifact_path": "<TMP>/tasks/golden/06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 6,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 1,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: reviewer\nnext_step: 7\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 1\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 1,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 1
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 2
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from reviewer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "06-reviewer-pass-2.md",
+    "artifact_path": "<TMP>/tasks/golden/06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 6,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 1,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "reviewer",
+    "deploy_intent": true,
+    "next_step": 7,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "reviewer approved_with_warnings",
+  "dispatched": [
+   "07-arbiter.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "reviewer",
+    "step": 6,
+    "timestamp": "<T>",
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "reviewer",
+      "reviewer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "reviewer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "reviewer",
+      "arbiter"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "arbiter",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "arbiter_started",
+    "payload": {
+     "report": "07-arbiter.md",
+     "situation": "warning",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    },
+    "phase": "arbiter",
+    "step": 7,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "arbiter",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from arbiter yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "07-arbiter.md",
+    "artifact_path": "<TMP>/tasks/golden/07-arbiter.md",
+    "phase": "arbiter",
+    "recorded": false,
+    "started": "<T>",
+    "step": 7,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 1,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: arbiter\nnext_step: 8\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 1\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 1,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 1
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 2
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from arbiter yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "07-arbiter.md",
+    "artifact_path": "<TMP>/tasks/golden/07-arbiter.md",
+    "phase": "arbiter",
+    "recorded": false,
+    "started": "<T>",
+    "step": 7,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 1,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "arbiter",
+    "deploy_intent": true,
+    "next_step": 8,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "arbiter escalates",
+  "dispatched": [],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "arbiter",
+    "step": 7,
+    "timestamp": "<T>",
+    "verdict": "escalate"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "arbiter",
+      "arbiter"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "arbiter",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "arbiter_ruled",
+    "payload": {
+     "outcome": "the Arbiter asks the owner to decide",
+     "report": "07-arbiter.md",
+     "routed": false,
+     "ruling": {
+      "choices": [
+       {
+        "does": "send-back",
+        "name": "arbiter-1",
+        "phase": null,
+        "says": "Fix the edge case first."
+       },
+       {
+        "does": "abort",
+        "name": "arbiter-2",
+        "phase": null,
+        "says": "Stop here."
+       }
+      ],
+      "decision": "escalate",
+      "do_not_reopen": [],
+      "fix": [],
+      "follow_ups": [],
+      "known_flaws": [],
+      "question": "Ship the parser as it is, or fix the edge case first?",
+      "reason": "The owner must choose.",
+      "recommended": "arbiter-1",
+      "replan_to": null
+     },
+     "situation": "warning"
+    },
+    "phase": "arbiter",
+    "step": 7,
+    "timestamp": "<T>",
+    "verdict": "escalate"
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "arbiter",
+   "gate": {
+    "approve_command": null,
+    "arbiter": {
+     "choices": [
+      {
+       "does": "send-back",
+       "name": "arbiter-1",
+       "phase": null,
+       "says": "Fix the edge case first."
+      },
+      {
+       "does": "abort",
+       "name": "arbiter-2",
+       "phase": null,
+       "says": "Stop here."
+      }
+     ],
+     "decision": "escalate",
+     "do_not_reopen": [],
+     "fix": [],
+     "follow_ups": [],
+     "known_flaws": [],
+     "needs_owner_because": [],
+     "problem": null,
+     "question": "Ship the parser as it is, or fix the edge case first?",
+     "reason": "The owner must choose.",
+     "recommends": "arbiter-1",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "situation": "warning",
+     "step": 7
+    },
+    "kind": "arbiter_escalation",
+    "next_phase": null,
+    "reason": "the Arbiter asks the owner to decide",
+    "send_back_command": "relay send-back golden",
+    "send_back_recommended": false,
+    "state": "waiting_on_owner"
+   },
+   "latest_step": {
+    "artifact": "07-arbiter.md",
+    "artifact_path": "<TMP>/tasks/golden/07-arbiter.md",
+    "phase": "arbiter",
+    "recorded": true,
+    "started": "<T>",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 1,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: arbiter\nnext_step: 8\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 1\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 1,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 1
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 1,
+     "review_loop_by_role": {
+      "reviewer": 1,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 0,
+      "relay": 1
+     },
+     "total": 2
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "arbiter": {
+     "choices": [
+      {
+       "does": "send-back",
+       "name": "arbiter-1",
+       "phase": null,
+       "says": "Fix the edge case first."
+      },
+      {
+       "does": "abort",
+       "name": "arbiter-2",
+       "phase": null,
+       "says": "Stop here."
+      }
+     ],
+     "decision": "escalate",
+     "do_not_reopen": [],
+     "fix": [],
+     "follow_ups": [],
+     "known_flaws": [],
+     "needs_owner_because": [],
+     "problem": null,
+     "question": "Ship the parser as it is, or fix the edge case first?",
+     "reason": "The owner must choose.",
+     "recommends": "arbiter-1",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "situation": "warning",
+     "step": 7
+    },
+    "kind": "arbiter_escalation",
+    "next_phase": null,
+    "reason": "the Arbiter asks the owner to decide",
+    "send_back_command": "relay send-back golden",
+    "send_back_recommended": false,
+    "state": "waiting_on_owner"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "07-arbiter.md",
+    "artifact_path": "<TMP>/tasks/golden/07-arbiter.md",
+    "phase": "arbiter",
+    "recorded": true,
+    "started": "<T>",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 1,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "arbiter",
+    "deploy_intent": true,
+    "next_step": 8,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   }
+  ]
+ },
+ {
+  "action": "send-back with a note",
+  "dispatched": [
+   "08-builder-fix-2.md"
+  ],
+  "events": [
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "arbiter",
+      "builder"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "builder",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "sent_back",
+    "payload": {
+     "note": "Fix the warnings.",
+     "to_phase": "builder"
+    },
+    "phase": "arbiter",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": "escalate"
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "builder",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "08-builder-fix-2.md",
+    "artifact_path": "<TMP>/tasks/golden/08-builder-fix-2.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 8,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: builder\nnext_step: 9\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 1\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from builder yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "08-builder-fix-2.md",
+    "artifact_path": "<TMP>/tasks/golden/08-builder-fix-2.md",
+    "phase": "builder",
+    "recorded": false,
+    "started": "<T>",
+    "step": 8,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "builder",
+    "deploy_intent": true,
+    "next_step": 9,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "builder fix ready-for-review again",
+  "dispatched": [
+   "09-reviewer-pass-2.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "builder",
+    "step": 8,
+    "timestamp": "<T>",
+    "verdict": "ready-for-review"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "builder",
+      "builder"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "builder",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "test_run",
+    "payload": {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed"
+    },
+    "phase": "builder",
+    "step": 8,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "builder",
+      "reviewer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "reviewer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "reviewer",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from reviewer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "09-reviewer-pass-2.md",
+    "artifact_path": "<TMP>/tasks/golden/09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 9,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: reviewer\nnext_step: 10\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 9\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from reviewer yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "09-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 9,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "09-reviewer-pass-2.md",
+    "artifact_path": "<TMP>/tasks/golden/09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "recorded": false,
+    "started": "<T>",
+    "step": 9,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "reviewer",
+    "deploy_intent": true,
+    "next_step": 10,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 9,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "reviewer approved",
+  "dispatched": [
+   "10-tester.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "reviewer",
+    "step": 9,
+    "timestamp": "<T>",
+    "verdict": "approved"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "reviewer",
+      "reviewer"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "reviewer",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "reviewer",
+      "tester"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "tester",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "tester",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from tester yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "10-tester.md",
+    "artifact_path": "<TMP>/tasks/golden/10-tester.md",
+    "phase": "tester",
+    "recorded": false,
+    "started": "<T>",
+    "step": 10,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: tester\nnext_step: 11\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 9\n  timestamp: '<T>'\n  verdict: approved\n- phase: tester\n  step: 10\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from tester yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "09-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 9,
+     "timestamp": "<T>",
+     "verdict": "approved"
+    },
+    {
+     "artifact": "10-tester.md",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "10-tester.md",
+    "artifact_path": "<TMP>/tasks/golden/10-tester.md",
+    "phase": "tester",
+    "recorded": false,
+    "started": "<T>",
+    "step": 10,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "tester",
+    "deploy_intent": true,
+    "next_step": 11,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 9,
+    "verdict": "approved"
+   },
+   {
+    "artifact_filename": "10-tester.md",
+    "phase": "tester",
+    "step": 10,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "tester pass",
+  "dispatched": [
+   "11-security.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "tester",
+    "step": 10,
+    "timestamp": "<T>",
+    "verdict": "pass"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "tester",
+      "tester"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "tester",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "test_run",
+    "payload": {
+     "command": "make test",
+     "commit": "c010",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed"
+    },
+    "phase": "tester",
+    "step": 10,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "tester",
+      "security"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "security",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "security",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from security yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "11-security.md",
+    "artifact_path": "<TMP>/tasks/golden/11-security.md",
+    "phase": "security",
+    "recorded": false,
+    "started": "<T>",
+    "step": 11,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: security\nnext_step: 12\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 9\n  timestamp: '<T>'\n  verdict: approved\n- phase: tester\n  step: 10\n  timestamp: '<T>'\n  verdict: pass\n- phase: security\n  step: 11\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from security yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "09-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 9,
+     "timestamp": "<T>",
+     "verdict": "approved"
+    },
+    {
+     "artifact": "10-tester.md",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>",
+     "verdict": "pass"
+    },
+    {
+     "artifact": "11-security.md",
+     "phase": "security",
+     "step": 11,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "11-security.md",
+    "artifact_path": "<TMP>/tasks/golden/11-security.md",
+    "phase": "security",
+    "recorded": false,
+    "started": "<T>",
+    "step": 11,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "security",
+    "deploy_intent": true,
+    "next_step": 12,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c010",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 9,
+    "verdict": "approved"
+   },
+   {
+    "artifact_filename": "10-tester.md",
+    "phase": "tester",
+    "step": 10,
+    "verdict": "pass"
+   },
+   {
+    "artifact_filename": "11-security.md",
+    "phase": "security",
+    "step": 11,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "security secure",
+  "dispatched": [
+   "12-ops.md"
+  ],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "security",
+    "step": 11,
+    "timestamp": "<T>",
+    "verdict": "secure"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "security",
+      "security"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "security",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "security",
+      "ops"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "ops",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "ops",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from ops yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": false,
+    "started": "<T>",
+    "step": 12,
+    "verdict": null
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: ops\nnext_step: 13\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 9\n  timestamp: '<T>'\n  verdict: approved\n- phase: tester\n  step: 10\n  timestamp: '<T>'\n  verdict: pass\n- phase: security\n  step: 11\n  timestamp: '<T>'\n  verdict: secure\n- phase: ops\n  step: 12\n  timestamp: '<T>'\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "No verdict from ops yet.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_agent"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "09-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 9,
+     "timestamp": "<T>",
+     "verdict": "approved"
+    },
+    {
+     "artifact": "10-tester.md",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>",
+     "verdict": "pass"
+    },
+    {
+     "artifact": "11-security.md",
+     "phase": "security",
+     "step": 11,
+     "timestamp": "<T>",
+     "verdict": "secure"
+    },
+    {
+     "artifact": "12-ops.md",
+     "phase": "ops",
+     "step": 12,
+     "timestamp": "<T>",
+     "verdict": null
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": false,
+    "started": "<T>",
+    "step": 12,
+    "verdict": null
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "ops",
+    "deploy_intent": true,
+    "next_step": 13,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c010",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 9,
+    "verdict": "approved"
+   },
+   {
+    "artifact_filename": "10-tester.md",
+    "phase": "tester",
+    "step": 10,
+    "verdict": "pass"
+   },
+   {
+    "artifact_filename": "11-security.md",
+    "phase": "security",
+    "step": 11,
+    "verdict": "secure"
+   },
+   {
+    "artifact_filename": "12-ops.md",
+    "phase": "ops",
+    "step": 12,
+    "verdict": null
+   }
+  ]
+ },
+ {
+  "action": "ops deploy-ready",
+  "dispatched": [],
+  "events": [
+   {
+    "event_type": "verdict_recorded",
+    "phase": "ops",
+    "step": 12,
+    "timestamp": "<T>",
+    "verdict": "deploy-ready"
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "ops",
+      "ops"
+     ],
+     "status": [
+      "in_progress",
+      "in_progress"
+     ]
+    },
+    "phase": "ops",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "ops",
+   "gate": {
+    "approve_command": "relay override golden done",
+    "kind": "deploy_approval",
+    "next_phase": null,
+    "reason": "ops verdict: deploy-ready, requires human approval to proceed",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_owner"
+   },
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": true,
+    "started": "<T>",
+    "step": 12,
+    "verdict": "deploy-ready"
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "in_progress",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: in_progress\ncurrent_phase: ops\nnext_step: 13\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 9\n  timestamp: '<T>'\n  verdict: approved\n- phase: tester\n  step: 10\n  timestamp: '<T>'\n  verdict: pass\n- phase: security\n  step: 11\n  timestamp: '<T>'\n  verdict: secure\n- phase: ops\n  step: 12\n  timestamp: '<T>'\n  verdict: deploy-ready\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": "relay override golden done",
+    "kind": "deploy_approval",
+    "next_phase": null,
+    "reason": "ops verdict: deploy-ready, requires human approval to proceed",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "waiting_on_owner"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "09-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 9,
+     "timestamp": "<T>",
+     "verdict": "approved"
+    },
+    {
+     "artifact": "10-tester.md",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>",
+     "verdict": "pass"
+    },
+    {
+     "artifact": "11-security.md",
+     "phase": "security",
+     "step": 11,
+     "timestamp": "<T>",
+     "verdict": "secure"
+    },
+    {
+     "artifact": "12-ops.md",
+     "phase": "ops",
+     "step": 12,
+     "timestamp": "<T>",
+     "verdict": "deploy-ready"
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": true,
+    "started": "<T>",
+    "step": 12,
+    "verdict": "deploy-ready"
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "ops",
+    "deploy_intent": true,
+    "next_step": 13,
+    "repo": null,
+    "status": "in_progress",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c010",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 9,
+    "verdict": "approved"
+   },
+   {
+    "artifact_filename": "10-tester.md",
+    "phase": "tester",
+    "step": 10,
+    "verdict": "pass"
+   },
+   {
+    "artifact_filename": "11-security.md",
+    "phase": "security",
+    "step": 11,
+    "verdict": "secure"
+   },
+   {
+    "artifact_filename": "12-ops.md",
+    "phase": "ops",
+    "step": 12,
+    "verdict": "deploy-ready"
+   }
+  ]
+ },
+ {
+  "action": "override done with a note",
+  "dispatched": [],
+  "events": [
+   {
+    "event_type": "approval",
+    "payload": {
+     "method": "override",
+     "next_phase": "done",
+     "note": "Shipped."
+    },
+    "phase": "ops",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   },
+   {
+    "event_type": "state_saved",
+    "payload": {
+     "current_phase": [
+      "ops",
+      "done"
+     ],
+     "status": [
+      "in_progress",
+      "completed"
+     ]
+    },
+    "phase": "done",
+    "step": null,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    },
+    {
+     "method": "override",
+     "next_phase": "done",
+     "note": "Shipped.",
+     "phase": "ops",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "done",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "Task is completed.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "closed"
+   },
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": true,
+    "started": "<T>",
+    "step": 12,
+    "verdict": "deploy-ready"
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "completed",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: completed\ncurrent_phase: done\nnext_step: 13\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 9\n  timestamp: '<T>'\n  verdict: approved\n- phase: tester\n  step: 10\n  timestamp: '<T>'\n  verdict: pass\n- phase: security\n  step: 11\n  timestamp: '<T>'\n  verdict: secure\n- phase: ops\n  step: 12\n  timestamp: '<T>'\n  verdict: deploy-ready\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    },
+    {
+     "method": "override",
+     "next_phase": "done",
+     "note": "Shipped.",
+     "phase": "ops",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "Task is completed.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "closed"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "09-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 9,
+     "timestamp": "<T>",
+     "verdict": "approved"
+    },
+    {
+     "artifact": "10-tester.md",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>",
+     "verdict": "pass"
+    },
+    {
+     "artifact": "11-security.md",
+     "phase": "security",
+     "step": 11,
+     "timestamp": "<T>",
+     "verdict": "secure"
+    },
+    {
+     "artifact": "12-ops.md",
+     "phase": "ops",
+     "step": 12,
+     "timestamp": "<T>",
+     "verdict": "deploy-ready"
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": true,
+    "started": "<T>",
+    "step": 12,
+    "verdict": "deploy-ready"
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "done",
+     "note": "Shipped.",
+     "phase": "ops",
+     "step": null,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "done",
+    "deploy_intent": true,
+    "next_step": 13,
+    "repo": null,
+    "status": "completed",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c010",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 9,
+    "verdict": "approved"
+   },
+   {
+    "artifact_filename": "10-tester.md",
+    "phase": "tester",
+    "step": 10,
+    "verdict": "pass"
+   },
+   {
+    "artifact_filename": "11-security.md",
+    "phase": "security",
+    "step": 11,
+    "verdict": "secure"
+   },
+   {
+    "artifact_filename": "12-ops.md",
+    "phase": "ops",
+    "step": 12,
+    "verdict": "deploy-ready"
+   }
+  ]
+ },
+ {
+  "action": "note",
+  "dispatched": [],
+  "events": [
+   {
+    "event_type": "owner_note",
+    "payload": {
+     "note": "Recorded after the close."
+    },
+    "phase": "done",
+    "step": 12,
+    "timestamp": "<T>",
+    "verdict": null
+   }
+  ],
+  "gate_check": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    },
+    {
+     "method": "override",
+     "next_phase": "done",
+     "note": "Shipped.",
+     "phase": "ops",
+     "timestamp": "<T>"
+    }
+   ],
+   "current_phase": "done",
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "Task is completed.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "closed"
+   },
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": true,
+    "started": "<T>",
+    "step": 12,
+    "verdict": "deploy-ready"
+   },
+   "ok": true,
+   "schema": "relay.gate-check",
+   "schema_version": 4,
+   "status": "completed",
+   "task_id": "golden"
+  },
+  "retries": {
+   "builder": 0,
+   "reviewer": 1
+  },
+  "run_yaml": "task_id: golden\ncreated: '<T>'\nupdated: '<T>'\nstatus: completed\ncurrent_phase: done\nnext_step: 13\nschema_version: 1\nrepo: null\nworktree_path: null\nbranch: null\nbase: null\ndeploy_intent: true\nretries:\n  builder: 0\n  reviewer: 1\nhistory:\n- phase: designer\n  step: 1\n  timestamp: '<T>'\n  verdict: ready-for-architect\n- phase: architect\n  step: 2\n  timestamp: '<T>'\n  verdict: ready-for-builder\n- phase: builder\n  step: 3\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 4\n  timestamp: '<T>'\n  verdict: changes_requested\n- phase: builder\n  step: 5\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 6\n  timestamp: '<T>'\n  verdict: approved_with_warnings\n- phase: arbiter\n  step: 7\n  timestamp: '<T>'\n  verdict: escalate\n- phase: builder\n  step: 8\n  timestamp: '<T>'\n  verdict: ready-for-review\n- phase: reviewer\n  step: 9\n  timestamp: '<T>'\n  verdict: approved\n- phase: tester\n  step: 10\n  timestamp: '<T>'\n  verdict: pass\n- phase: security\n  step: 11\n  timestamp: '<T>'\n  verdict: secure\n- phase: ops\n  step: 12\n  timestamp: '<T>'\n  verdict: deploy-ready\n\n",
+  "status": {
+   "approvals": [
+    {
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "timestamp": "<T>"
+    },
+    {
+     "method": "override",
+     "next_phase": "done",
+     "note": "Shipped.",
+     "phase": "ops",
+     "timestamp": "<T>"
+    }
+   ],
+   "arbiter_rulings": [
+    {
+     "decision": "escalate",
+     "problem": null,
+     "reason": "The owner must choose.",
+     "replan_to": null,
+     "report": "07-arbiter.md",
+     "routed": false,
+     "situation": "warning",
+     "step": 7,
+     "timestamp": "<T>",
+     "trigger": {
+      "phase": "reviewer",
+      "step": 6,
+      "verdict": "approved_with_warnings"
+     }
+    }
+   ],
+   "builder_steps": {
+    "replan_step": null,
+    "review_loops_since_replan": 2,
+    "since_replan": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 0,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 2
+    },
+    "steps": [
+     {
+      "cause": "first_build",
+      "role": null,
+      "started_by": null,
+      "step": 3
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "relay",
+      "step": 5
+     },
+     {
+      "cause": "review_loop",
+      "role": "reviewer",
+      "started_by": "owner",
+      "step": 8
+     }
+    ],
+    "task": {
+     "after_replan": 0,
+     "failed_test_run": 0,
+     "first_build": 1,
+     "owner_elsewhere": 0,
+     "review_loop": 2,
+     "review_loop_by_role": {
+      "reviewer": 2,
+      "security": 0,
+      "tester": 0
+     },
+     "review_loop_by_starter": {
+      "arbiter": 0,
+      "owner": 1,
+      "relay": 1
+     },
+     "total": 3
+    }
+   },
+   "follow_ups": [],
+   "gate": {
+    "approve_command": null,
+    "kind": null,
+    "next_phase": null,
+    "reason": "Task is completed.",
+    "send_back_command": null,
+    "send_back_recommended": false,
+    "state": "closed"
+   },
+   "history": [
+    {
+     "artifact": "01-designer.md",
+     "phase": "designer",
+     "step": 1,
+     "timestamp": "<T>",
+     "verdict": "ready-for-architect"
+    },
+    {
+     "artifact": "02-architect.md",
+     "phase": "architect",
+     "step": 2,
+     "timestamp": "<T>",
+     "verdict": "ready-for-builder"
+    },
+    {
+     "artifact": "03-builder.md",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "04-reviewer.md",
+     "phase": "reviewer",
+     "step": 4,
+     "timestamp": "<T>",
+     "verdict": "changes_requested"
+    },
+    {
+     "artifact": "05-builder-fix-1.md",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "06-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 6,
+     "timestamp": "<T>",
+     "verdict": "approved_with_warnings"
+    },
+    {
+     "artifact": "07-arbiter.md",
+     "phase": "arbiter",
+     "step": 7,
+     "timestamp": "<T>",
+     "verdict": "escalate"
+    },
+    {
+     "artifact": "08-builder-fix-2.md",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>",
+     "verdict": "ready-for-review"
+    },
+    {
+     "artifact": "09-reviewer-pass-2.md",
+     "phase": "reviewer",
+     "step": 9,
+     "timestamp": "<T>",
+     "verdict": "approved"
+    },
+    {
+     "artifact": "10-tester.md",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>",
+     "verdict": "pass"
+    },
+    {
+     "artifact": "11-security.md",
+     "phase": "security",
+     "step": 11,
+     "timestamp": "<T>",
+     "verdict": "secure"
+    },
+    {
+     "artifact": "12-ops.md",
+     "phase": "ops",
+     "step": 12,
+     "timestamp": "<T>",
+     "verdict": "deploy-ready"
+    }
+   ],
+   "interruptions": [],
+   "latest_step": {
+    "artifact": "12-ops.md",
+    "artifact_path": "<TMP>/tasks/golden/12-ops.md",
+    "phase": "ops",
+    "recorded": true,
+    "started": "<T>",
+    "step": 12,
+    "verdict": "deploy-ready"
+   },
+   "max_retries": 3,
+   "ok": true,
+   "owner_notes": [
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "builder",
+     "note": "Go ahead.",
+     "phase": "architect",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "sent_back",
+     "method": null,
+     "next_phase": "builder",
+     "note": "Fix the warnings.",
+     "phase": "arbiter",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "approval",
+     "method": "override",
+     "next_phase": "done",
+     "note": "Shipped.",
+     "phase": "ops",
+     "step": null,
+     "timestamp": "<T>"
+    },
+    {
+     "kind": "note",
+     "method": null,
+     "next_phase": null,
+     "note": "Recorded after the close.",
+     "phase": "done",
+     "step": 12,
+     "timestamp": "<T>"
+    }
+   ],
+   "retries": {
+    "builder": 0,
+    "reviewer": 1
+   },
+   "schema": "relay.status",
+   "schema_version": 4,
+   "task": {
+    "base": null,
+    "branch": null,
+    "created": "<T>",
+    "current_phase": "done",
+    "deploy_intent": true,
+    "next_step": 13,
+    "repo": null,
+    "status": "completed",
+    "task_id": "golden",
+    "updated": "<T>",
+    "worktree_path": null
+   },
+   "test_runs": [
+    {
+     "command": "make test",
+     "commit": "c003",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 3,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c005",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 5,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c008",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "builder",
+     "step": 8,
+     "timestamp": "<T>"
+    },
+    {
+     "command": "make test",
+     "commit": "c010",
+     "duration_seconds": 1,
+     "exit_code": 0,
+     "outcome": "passed",
+     "phase": "tester",
+     "step": 10,
+     "timestamp": "<T>"
+    }
+   ],
+   "time_limit_stops": []
+  },
+  "steps": [
+   {
+    "artifact_filename": "01-designer.md",
+    "phase": "designer",
+    "step": 1,
+    "verdict": "ready-for-architect"
+   },
+   {
+    "artifact_filename": "02-architect.md",
+    "phase": "architect",
+    "step": 2,
+    "verdict": "ready-for-builder"
+   },
+   {
+    "artifact_filename": "03-builder.md",
+    "phase": "builder",
+    "step": 3,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "04-reviewer.md",
+    "phase": "reviewer",
+    "step": 4,
+    "verdict": "changes_requested"
+   },
+   {
+    "artifact_filename": "05-builder-fix-1.md",
+    "phase": "builder",
+    "step": 5,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "06-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 6,
+    "verdict": "approved_with_warnings"
+   },
+   {
+    "artifact_filename": "07-arbiter.md",
+    "phase": "arbiter",
+    "step": 7,
+    "verdict": "escalate"
+   },
+   {
+    "artifact_filename": "08-builder-fix-2.md",
+    "phase": "builder",
+    "step": 8,
+    "verdict": "ready-for-review"
+   },
+   {
+    "artifact_filename": "09-reviewer-pass-2.md",
+    "phase": "reviewer",
+    "step": 9,
+    "verdict": "approved"
+   },
+   {
+    "artifact_filename": "10-tester.md",
+    "phase": "tester",
+    "step": 10,
+    "verdict": "pass"
+   },
+   {
+    "artifact_filename": "11-security.md",
+    "phase": "security",
+    "step": 11,
+    "verdict": "secure"
+   },
+   {
+    "artifact_filename": "12-ops.md",
+    "phase": "ops",
+    "step": 12,
+    "verdict": "deploy-ready"
+   }
+  ]
+ }
+]

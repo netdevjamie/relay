@@ -35,7 +35,9 @@ def read_owner_notes(task_id: str, config: dict) -> list[dict]:
         return []
     notes = []
     for event in db.get_events(get_db_connection(), task_id):
-        payload = event.get("payload") or {}
+        payload = event.get("payload")
+        if not isinstance(payload, dict):  # no payload, or a hand-edited one: no note to read
+            continue
         note = payload.get("note")
         if not isinstance(note, str) or not note.strip():
             continue
@@ -83,9 +85,9 @@ def prompt_for_send_back(task_id: str, config: dict, note: str | None) -> str:
     return text + owner_notes_prompt(task_id, config)
 
 
-# The owner's answers at a process audit's gate, as the approval's method
-# records them. Relay no longer runs the audit, but ledgers written by older
-# versions still hold these answers, and their notes are still read.
+# The owner's answers at the gate of a process audit Relay once ran, as the
+# approval's method records them. Older ledgers hold these answers, and
+# their notes are still read.
 AUDIT_ANSWERS = {"go-on": "go on", "pause": "pause"}
 
 

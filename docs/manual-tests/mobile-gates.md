@@ -6,10 +6,10 @@ Everything else (every gate kind, the same ledger rows as the Mac, refusals) is 
 
 | | |
 |---|---|
-| Task | relay-mobile-gates |
+| Task | Deciding gates from a phone |
 | Commit under test | {the commit you run, from `git rev-parse --short HEAD` in the checkout} |
 | Build | A checkout of the Relay repo, run through the setup script's `relay` (not the installed one) |
-| Environment | Your iPhone in the Claude app; this Mac awake, lid open, on power |
+| Environment | Your iPhone in the Claude app; the Mac awake, lid open, on power |
 | Why not automated | A push to your phone and reading on its screen |
 | Time needed | About 15 minutes, plus step 12 later at the Mac (2 minutes) |
 
@@ -19,7 +19,7 @@ Everything else (every gate kind, the same ledger rows as the Mac, refusals) is 
 2. In that session's `/config`, **Push when actions required** is on. If it says "No mobile registered", open the Claude app on the phone once.
 3. iPhone: Settings, Notifications, Claude: Allow Notifications on. Any Focus you use lets Claude through.
 4. The session runs this, from the Relay checkout:
-   `python3 docs/manual-tests/relay-mobile-gates-setup.py`
+   `python3 docs/manual-tests/mobile-gates-setup.py`
    Its last line is `Ready. Run the plan's commands as: <folder>/relay <command>`. Below, "relay" means that `<folder>/relay`. Tell the session so.
 5. The iPhone is on a Wi-Fi network that is not the Mac's. Write both network names under "Result".
 6. Plant a role's Markdown for steps 2 and 6b. The session, with its file tool, replaces the line `Body.` in `<folder>/home/tasks/phone-review/04-reviewer.md` with these lines, exactly:
@@ -105,8 +105,8 @@ Fill in Actual and Result (pass or fail). HH:MM is a time of day.
 - **Result:**
 
 ### 11. Clean up
-- **Do:** Type: `run python3 docs/manual-tests/relay-mobile-gates-setup.py --clean and rm /tmp/relay-phone-push-test`
-- **Expected:** `Removed <folder>/relay-mobile-gates-phone`, and no error from `rm`.
+- **Do:** Type: `run python3 docs/manual-tests/mobile-gates-setup.py --clean and rm /tmp/relay-phone-push-test`
+- **Expected:** `Removed <folder>/relay-phone-gates`, and no error from `rm`.
 - **Actual:**
 - **Result:**
 
@@ -121,7 +121,7 @@ Fill in Actual and Result (pass or fail). HH:MM is a time of day.
 | # | Check | Expected | Actual | Result |
 |---|---|---|---|---|
 | N1 | In the app, count the `relay decide` runs the session made. | Three: steps 4, 8 and 9. None you did not ask for. | | |
-| N2 | Read the output of steps 2, 5, 6, 6b, 7 and 9. | No folder path (nothing starting `/Users/` or `/private/`). | | |
+| N2 | Read the output of steps 2, 5, 6, 6b, 7 and 9. | No folder path (nothing starting with your home folder's path or `/private/`). | | |
 | N4 | Steps 2 and 6b. | No tappable link and no image from the report: the session shows Relay's output inside the code block, not retold outside it. | | |
 | N3 | Step 9. | Nothing recorded: the session shows no `Recorded:` block. | | |
 

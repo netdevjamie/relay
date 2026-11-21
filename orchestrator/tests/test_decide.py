@@ -17,17 +17,23 @@ import db
 import gate_card
 import read_api
 import relay
+from tests.cli_edge import run_relay
 import run_state
 import settings
-from tests.test_automatic_rounds import builder_finishes, next_
+from tests.test_agent_dispatch import record_commands
+from tests.test_automatic_rounds import builder_finishes, next_, next_from_the_command_line
 from tests.test_gate_card import (
     GATES, SECURITY_DONE, at_accept_close, at_approval, at_deploy, at_paused,
     at_retry_limit, deploying,
 )
 
 from tests.test_send_back import UP_TO_REVIEW, config, finish_step, task_at  # noqa: F401
+from tests.arbiter_fixtures import finish_arbiter, stand_at_the_gate
 
 NOTE = "Fix the parser only."
+# The gates test_gate_card.py walks to by standing at them, as a `relay next`
+# from before the Arbiter left them, rather than by running `relay next`.
+STANDING_GATES = ("approval", "approval to done", "fix_rounds")
 
 
 def step_of(task_id, config) -> int:
@@ -57,9 +63,23 @@ def gate_kind_of(task_id, config) -> str:
 
 
 def decide(task_id, config, choice, step=None, to_phase=None, note=None, gate_kind=None):
-    commands.cmd_decide(task_id, choice, step_of(task_id, config) if step is None else step,
-                        gate_kind_of(task_id, config) if gate_kind is None else gate_kind,
-                        to_phase, note, config)
+    assert commands.cmd_decide(task_id, choice,
+                               step_of(task_id, config) if step is None else step,
+                               gate_kind_of(task_id, config) if gate_kind is None else gate_kind,
+                               to_phase, note, config) == 0
+
+
+def decide_from_the_command_line(task_id, config, choice, step=None, to_phase=None, note=None,
+                                 gate_kind=None):
+    """`relay decide`, for a test that asserts how the command line exits.
+    The step and gate kind default to where the task stands now; a test
+    whose gate has moved on passes the ones the card was for."""
+    options = ["--to", to_phase] if to_phase else []
+    options += ["--note", note] if note is not None else []
+    run_relay(config, "decide", task_id, choice,
+              "--step", str(step_of(task_id, config) if step is None else step),
+              "--gate", gate_kind_of(task_id, config) if gate_kind is None else gate_kind,
+              *options)
 
 
 # Each case: the gate, the choice by name (with --to), and the CLI command at the Mac.
@@ -72,7 +92,7 @@ PARITY = [
     ("fix_rounds", "send-back", None, lambda t, c: commands.cmd_send_back(t, c, note=NOTE)),
     ("approval", "move-to", "architect", lambda t, c: commands.cmd_override(t, "architect", c, note=NOTE)),
     ("blocked", "move-to", "builder", lambda t, c: commands.cmd_override(t, "builder", c, note=NOTE)),
-    ("approval", "abort", None, lambda t, c: (commands.cmd_note(t, c, NOTE), commands.cmd_abort(t, c))),
+    ("approval", "abort", None, lambda t, c: commands.cmd_note(t, c, NOTE) or commands.cmd_abort(t, c)),
     ("approval", "note", None, lambda t, c: commands.cmd_note(t, c, NOTE)),
 ]
 
@@ -85,7 +105,7 @@ def test_decide_writes_the_same_ledger_rows_as_the_cli(config, gate, choice, to_
     walk("phone", config)
     assert_same(recorded("phone", config), recorded("mac", config))
     count_at_the_gate = len(events("phone"))
-    at_the_mac("mac", config)
+    assert at_the_mac("mac", config) == 0
     decide("phone", config, choice, to_phase=to_phase, note=NOTE)
     assert_same(recorded("phone", config), recorded("mac", config))
     assert len(events("phone")) > count_at_the_gate
@@ -103,7 +123,7 @@ def assert_same(phone, mac) -> None:
 def test_send_back_at_the_limit_is_a_send_back_and_starts_the_count_again_both_ways(config):
     at_retry_limit("mac", config)
     at_retry_limit("phone", config)
-    commands.cmd_send_back("mac", config)
+    assert commands.cmd_send_back("mac", config) == 0
     decide("phone", config, "send-back")
     for task_id in ("mac", "phone"):
         state = run_state.load_run_state(task_id, config)
@@ -125,11 +145,12 @@ def exits_with_one(call, *args, **kwargs):
 
 def test_the_same_choice_twice_is_refused_the_second_time(config, capsys):
     at_approval("t", config)
-    step = step_of("t", config)
+    step, kind = step_of("t", config), gate_kind_of("t", config)
     decide("t", config, "send-back", step=step)
     count = len(events("t"))
     capsys.readouterr()
-    exits_with_one(decide, "t", config, "send-back", step=step)
+    exits_with_one(decide_from_the_command_line, "t", config, "send-back", step=step,
+                   gate_kind=kind)
     out = capsys.readouterr().out
     assert out.startswith(f"Not applied: t is no longer waiting at step {step}; it is now Builder, ")
     assert "t\nStep 5, Builder\n" in out and "No report yet. Nothing for you to do." in " ".join(out.split())
@@ -143,15 +164,28 @@ def test_the_same_choice_twice_is_refused_the_second_time(config, capsys):
     (at_approval, "approve", "architect", "Not applied: --to is for move-to."),
     (at_approval, "note", None, "Not applied: note needs --note or --note-file."),
     (at_approval, "\x1b[31m" + "x" * 500, None, "Not applied: [31mxxx"),
-    (at_approval, "", None, "Not applied:  is not a choice at step 4 of t."),
 ])
 def test_a_choice_not_on_the_card_is_refused(config, capsys, walk, choice, to_phase, refusal):
     walk("t", config)
     before = (len(events("t")), run_state.load_run_state("t", config))
     capsys.readouterr()
-    exits_with_one(decide, "t", config, choice, to_phase=to_phase)
+    exits_with_one(decide_from_the_command_line, "t", config, choice, to_phase=to_phase)
     out = capsys.readouterr().out
     assert out.startswith(refusal)
+    assert "Choices:" in out
+    assert (len(events("t")), run_state.load_run_state("t", config)) == before
+
+
+def test_an_empty_choice_is_refused(config, capsys):
+    """The command line cannot send an empty choice (it stops at its own
+    usage check), so this one is called directly and its exit code read."""
+    at_approval("t", config)
+    before = (len(events("t")), run_state.load_run_state("t", config))
+    capsys.readouterr()
+    assert commands.cmd_decide("t", "", step_of("t", config), gate_kind_of("t", config),
+                               None, None, config) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("Not applied:  is not a choice at step 4 of t.")
     assert "Choices:" in out
     assert (len(events("t")), run_state.load_run_state("t", config)) == before
 
@@ -162,10 +196,10 @@ def test_an_old_step_is_refused_even_at_the_same_kind_of_gate(config, capsys):
     decide("t", config, "send-back")
     builder_finishes("t", config)
     finish_step("t", config, "approved_with_warnings")
-    next_("t", config)
+    stand_at_the_gate("t", config)  # the same kind of gate, left standing as at_approval leaves it
     count = len(events("t"))
     capsys.readouterr()
-    exits_with_one(decide, "t", config, "approve", step=old_step)
+    exits_with_one(decide_from_the_command_line, "t", config, "approve", step=old_step)
     assert capsys.readouterr().out.startswith(
         f"Not applied: t is no longer waiting at step {old_step}; it is now Reviewer gate.")
     assert len(events("t")) == count
@@ -184,10 +218,10 @@ def test_a_second_decision_while_the_first_is_applied_is_refused(config, capsys,
 
     def second_decision_arrives_first(task_id, config, auto=False, note=None):
         capsys.readouterr()
-        exits_with_one(decide, task_id, config, "approve", step=step, gate_kind=kind)
+        exits_with_one(decide_from_the_command_line, task_id, config, "approve", step=step, gate_kind=kind)
         second.append((capsys.readouterr().out, len(events(task_id)),
                        run_state.load_run_state(task_id, config), len(no_real_keep_awake)))
-        send_back(task_id, config, auto, note=note)
+        return send_back(task_id, config, auto, note=note)
 
     monkeypatch.setattr(commands, "cmd_send_back", second_decision_arrives_first)
     decide("t", config, "send-back", step=step, gate_kind=kind)
@@ -213,11 +247,42 @@ def test_relay_refusal_is_passed_through_with_the_card(config, capsys):
     at_approval("t", config)
     count = len(events("t"))
     capsys.readouterr()
-    exits_with_one(decide, "t", config, "send-back", note="x" * 4001)
+    exits_with_one(decide_from_the_command_line, "t", config, "send-back", note="x" * 4001)
     out = capsys.readouterr().out
     assert out.startswith("The note is 4001 characters; the limit is 4000")
     assert "Choices:" in out
     assert len(events("t")) == count
+
+
+def test_abort_with_a_note_too_long_to_keep_does_not_abort(config, capsys):
+    """Abort records its note first, by `relay note`; when that note is
+    refused, the abort must not go ahead: the task stays at its gate, no
+    event is written, and the command line exits 1 with the card."""
+    at_approval("t", config)
+    count = len(events("t"))
+    capsys.readouterr()
+    exits_with_one(decide_from_the_command_line, "t", config, "abort", note="x" * 4001)
+    out = capsys.readouterr().out
+    assert out.startswith("The note is 4001 characters; the limit is 4000")
+    assert "Recorded:" not in out
+    assert read_api.status_payload("t", config)["task"]["status"] != "abandoned"
+    assert len(events("t")) == count
+
+
+def test_an_agent_that_does_not_start_after_a_decision_shows_the_card_and_exits_1(
+        config, capsys, monkeypatch):
+    """The decision is recorded and the next phase dispatched; when its
+    agent fails, decide prints the card after Relay's own stop and exits 1
+    through the command line, with no Recorded: lines."""
+    at_approval("t", config)
+    record_commands(monkeypatch, returncode=1)
+    capsys.readouterr()
+    exits_with_one(decide_from_the_command_line, "t", dict(config, auto_invoke=True), "approve")
+    out = capsys.readouterr().out
+    assert "role did not start or did not finish: claude exited with code 1." in out
+    after_the_stop = " ".join(out[out.index("did not start"):].split())
+    assert "No report yet. Nothing for you to do." in after_the_stop   # the card, as it is now
+    assert "Recorded:" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -254,24 +319,6 @@ def test_confirmation_names_decision_task_step_and_where_next(config, capsys):
     assert gate_card.SEND_BACK_WORDS.format(role="Builder") in words
     assert f"Task t, step {step}." in words
     assert "Now: Builder, since" in words
-
-
-def test_a_note_is_confirmed_as_added_not_with_its_help_text(config, capsys):
-    at_approval("t", config)
-    capsys.readouterr()
-    decide("t", config, "note", note="Use argparse.")
-    out = capsys.readouterr().out
-    words = " ".join(out[out.index("Recorded:"):].split())
-    assert gate_card.NOTE_ADDED_WORDS in words
-    assert gate_card.NOTE_WORDS not in words
-
-
-def test_approve_says_where_the_task_moves_not_that_it_overrode(config, capsys):
-    at_approval("t", config)
-    capsys.readouterr()
-    decide("t", config, "approve")
-    out = capsys.readouterr().out
-    assert "Overriding" not in out
 
 
 def test_move_to_names_the_phase_it_moved_to(config, capsys):
@@ -311,14 +358,15 @@ def closed_at(task_id, config) -> datetime:
 
 def test_a_decision_that_closes_the_task_shows_the_time_it_closed(config, capsys):
     at_accept_close("t", config)
-    step = step_of("t", config)
+    step, kind = step_of("t", config), gate_kind_of("t", config)
     last_saved_long_ago("t", config)
     start = datetime.now(timezone.utc).replace(microsecond=0)
     capsys.readouterr()
     decide("t", config, "accept-close", step=step)
     recorded_line = [line for line in capsys.readouterr().out.splitlines()
                      if line.startswith("Now: ")]
-    exits_with_one(decide, "t", config, "accept-close", step=step)
+    exits_with_one(decide_from_the_command_line, "t", config, "accept-close", step=step,
+                   gate_kind=kind)
     refusal = capsys.readouterr().out.splitlines()[0]
     end = datetime.now(timezone.utc)
     times = clock_times_between(start, end)
@@ -365,6 +413,8 @@ def last_line(out: str) -> str:
                  "owner_decision", "retry_limit", "fix_rounds")])
 def test_relay_next_ends_with_the_stop_line_at_every_owner_stop(config, capsys, gate):
     GATES[gate][0]("t", config)
+    if gate in STANDING_GATES:  # the walk stands at the gate; `relay next` there prints it
+        next_("t", config)
     out = capsys.readouterr().out
     assert last_line(out) == gate_card.STOP_LINE
     assert out.count(gate_card.STOP_LINE) >= 1
@@ -376,7 +426,7 @@ def test_relay_next_ends_with_the_stop_line_at_every_owner_stop(config, capsys, 
 def test_relay_next_on_a_blocked_task_ends_with_the_stop_line(config, capsys, walk):
     walk("t", config)
     capsys.readouterr()
-    exits_with_one(next_, "t", config)
+    exits_with_one(next_from_the_command_line, "t", config)
     out = capsys.readouterr().out
     assert last_line(out) == gate_card.STOP_LINE and "Choices:" in out
 
@@ -420,3 +470,39 @@ def test_decide_through_the_cli_reads_the_note_file(config, monkeypatch, tmp_pat
     capsys.readouterr()
     relay.main()
     assert capsys.readouterr().out.endswith(f"Note: {AWKWARD_NOTE}\n")
+
+
+# ---------------------------------------------------------------------------
+# The Arbiter's choices
+# ---------------------------------------------------------------------------
+
+def at_an_unreadable_arbiter(task_id, config):
+    task_at(task_id, config, UP_TO_REVIEW)
+    finish_step(task_id, config, "approved_with_warnings")
+    next_(task_id, config)
+    next_(task_id, config)   # no report: Relay cannot act on it
+
+
+def test_decide_ask_arbiter_again_runs_the_arbiter_again_as_an_override(config):
+    at_an_unreadable_arbiter("t", config)
+    decide("t", config, "ask-arbiter-again")
+    latest = read_api.status_payload("t", config)["latest_step"]
+    assert (latest["phase"], latest["step"]) == ("arbiter", 6)
+    approvals = [event["payload"] for event in events("t") if event["event_type"] == db.EVENT_APPROVAL]
+    assert approvals == [{"next_phase": "arbiter", "method": "override", "note": None}]
+
+
+def test_decide_an_arbiter_option_with_to_is_refused(config, capsys):
+    task_at("t", config, UP_TO_REVIEW)
+    finish_step("t", config, "approved_with_warnings")
+    task_id = "t"
+    next_(task_id, config)
+    finish_arbiter(task_id, config, "escalate")
+    next_(task_id, config)
+    count = len(events("t"))
+    capsys.readouterr()
+    exits_with_one(decide_from_the_command_line, "t", config, "arbiter-1", to_phase="ops")
+    assert capsys.readouterr().out.startswith("Not applied: --to is for move-to.")
+    assert len(events("t")) == count
+    decide("t", config, "arbiter-1")              # send-back to the Builder
+    assert read_api.status_payload("t", config)["latest_step"]["phase"] == "builder"

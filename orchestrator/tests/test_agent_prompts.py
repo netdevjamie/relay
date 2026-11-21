@@ -27,7 +27,7 @@ SEARCH_EVERY_PROJECT_FOLDER = 'find "$WORKSPACE" '
 # The install checks copy the smoke command from Relay's own profile.
 PROFILE = AGENTS_DIR.parent / ".relay" / "profile.yaml"
 ROLE_FILES = ["designer.md", "architect.md", "builder.md", "reviewer.md",
-              "tester.md", "security.md", "ops.md"]
+              "tester.md", "security.md", "ops.md", "arbiter.md"]
 SHARED_RULES = """## Rules for every role
 
 - Never print or commit secrets.
@@ -102,7 +102,7 @@ def test_role_file_contains_the_shared_rules_verbatim(role_file):
     assert SHARED_RULES in text, f"{role_file} is missing or has altered the shared rules"
 
 
-# The owner approves a role's commands from their phone, where a long script
+# The owner approves a role's commands from a phone, where a long script
 # cannot be judged: each part of the named-scripts rule, by its words.
 NAMED_SCRIPT_RULE_PARTS = ("about 10 lines", "any heredoc", "inline Python or Node", "named file",
                            "runs by name in one line", "one-line commands stay inline",
@@ -144,7 +144,7 @@ def test_prompt_verdicts_match_the_router(role_file):
     assert sorted(offered) == sorted(settings.VALID_VERDICTS[phase])
 
 
-# The three roles whose findings the card lists carry one more shared
+# The three roles whose findings the board lists carry one more shared
 # section, word for word: how to write the summary line and the rated
 # findings. report_reader.py reads exactly what this section asks for.
 # test_rating_phases_are_the_roles_with_a_rated_section holds this list to
@@ -215,9 +215,11 @@ ALLOWLIST = "That list is an allowlist"
 # applies.
 THE_CAP = "**The cap.**"
 WHEN_THE_CAP_APPLIES = "no safe"
-# What the lists of a review that approves cover: said where the
+# What the lists of a review that approves cover, which is what Relay's
+# check once held them to: said where the
 # Reviewer builds its list and where the report's three labels are named.
-ROUNDS_AN_APPROVAL_COVERS = "every round since the last review that approved"
+ROUNDS_AN_APPROVAL_COVERS = ("every round since the last review that approved and passed "
+                             "Relay's check")
 # What that comes to in the commonest fix round, where every earlier review
 # asked for changes: said once, where the Reviewer builds its list.
 ROUNDS_COVERED_WHEN_NONE_APPROVED = "or since the task's base when none has"
@@ -245,16 +247,17 @@ STANDING_RULES = {
     "6-security": ([STOPS_OF_SECURE, "**listed, not rated**", THE_CAP], ["## Not verified"]),
 }
 
-# How much a role file may hold: the length of a line of prose and the
-# words in the file. The four rating and building roles have a word
-# ceiling; the other three are named so that a new role file has to be put
-# in one list or the other. A ceiling is what `wc -w` gave for the file when
-# it was set, so a change that adds a sentence has to tighten another. List
-# markers and the bars of a table count as words. Raising a ceiling is
-# recorded in context/DECISIONS.md with the reason.
+# How much a role file may hold. A cap on lines alone can be kept by
+# writing new rules inside lines that are already there, so the measure is
+# the length of a line and the words in the file. The files with no limit
+# are named so that a new role file has to be put in one list or the other.
+# A ceiling is what `wc -w` gave for the file once every rule had a line:
+# a change that adds a sentence has to tighten another, or raise the
+# ceiling to exactly what the file then measures and say why in
+# context/DECISIONS.md. List markers and the bars of a table count as words.
 LONGEST_LINE_OF_PROSE = 450
-WORD_CEILINGS = {"builder.md": 2596, "reviewer.md": 3512, "tester.md": 3594,
-                 "security.md": 2967}
+WORD_CEILINGS = {"builder.md": 2596, "reviewer.md": 3659, "tester.md": 3594,
+                 "security.md": 2967, "arbiter.md": 1661}
 ROLE_FILES_WITH_NO_SIZE_LIMIT = ["architect.md", "designer.md", "ops.md"]
 
 
@@ -308,7 +311,7 @@ def weakened_test_ratings(role_file: str) -> list[list[str]]:
 
 
 def rating_word() -> re.Pattern:
-    """Matches any one of the ratings the card reads, as a whole word."""
+    """Matches any one of the ratings the board reads, as a whole word."""
     import report_reader
     return re.compile(rf"\b(?:{'|'.join(report_reader.SEVERITIES)})\b", re.IGNORECASE)
 
@@ -393,7 +396,7 @@ def test_prompt_and_reader_agree():
 @pytest.mark.parametrize("role_file", RATING_ROLE_FILES)
 def test_rating_definition_is_the_readers_three_words(role_file):
     """Each rating has its own definition, and the ratings defined are the
-    ones the card reads, highest first."""
+    ones the board reads, highest first."""
     import report_reader
     assert defined_ratings(role_file) == list(report_reader.SEVERITIES)
 
@@ -453,7 +456,7 @@ def test_a_weakened_test_is_rated_in_the_shared_definition_only(role_file):
 
 @pytest.mark.parametrize("role_file", RATING_ROLE_FILES)
 def test_a_weakened_test_is_rated_by_one_table(role_file):
-    """The table has one row for each rating the card reads, highest first.
+    """The table has one row for each rating the board reads, highest first.
     A rework nobody named, whatever forced it, is named once in the shared
     section, in a row that answers no and is rated highest."""
     import report_reader
@@ -673,49 +676,26 @@ def test_only_security_declares_a_capped_verdict():
 # What the role files say about lows
 # ---------------------------------------------------------------------------
 
-# Relay routes on a report's verdict alone and reads nothing else from it
-# but what the card shows (report_reader.py). A role file that says Relay
-# stops for a mark, a heading or a label tells the role a check exists that
-# does not. Each pattern is one wording of such a claim.
-CLAIMS_OF_A_CHECK_RELAY_DOES_NOT_MAKE = (
-    r"Relay stops", r"stops the task as", r"then a human looks first", r"Relay finds",
-    r"Relay's check", r"polish card", r"card can be filed", r"fix-now gate")
+# The sentence that retired when a low marked "fix now" began to stop a task.
+RETIRED_LOW_SENTENCE = "A low by itself stops at no gate"
 
 
 @pytest.mark.parametrize("role_file", RATING_ROLE_FILES)
-def test_the_low_row_and_definition_say_a_marked_low_moves_on(role_file):
+def test_the_low_row_and_definition_say_a_marked_low_stops(role_file):
     text = (AGENTS_DIR / role_file).read_text()
     low_rows = [line for line in section(role_file, "## Verdict (exactly one)").splitlines()
                 if line.startswith("| low, or no findings |")]
-    assert len(low_rows) == 1 and 'even when a low is marked "fix now"' in low_rows[0], (
-        f"{role_file}'s verdict table says a low marked fix now stops the task")
+    assert len(low_rows) == 1 and 'unless a low is marked "fix now"' in low_rows[0], (
+        f"{role_file}'s verdict table still says a low always moves on")
     low_definitions = [line for line in text.splitlines() if line.startswith("  - **Low:**")]
-    assert len(low_definitions) == 1 and "or stops the task" in low_definitions[0], (
-        f"{role_file}'s definition of low does not say a low never stops the task")
+    assert len(low_definitions) == 1 and "its mark, below, decides" in low_definitions[0], (
+        f"{role_file}'s definition of low does not point to the marks")
+    assert RETIRED_LOW_SENTENCE not in text
 
 
 @pytest.mark.parametrize("role_file", ROLE_FILES)
-def test_no_role_file_claims_a_check_relay_does_not_make(role_file):
-    text = " ".join((AGENTS_DIR / role_file).read_text().split())
-    claims = [claim for claim in CLAIMS_OF_A_CHECK_RELAY_DOES_NOT_MAKE if re.search(claim, text)]
-    assert not claims, f"{role_file} claims a check Relay does not make: {claims}"
-
-
-# A fix and most features reach the Builder with no Architect's plan
-# (sizing.py). Every role that reads the plan says what to do without one, in
-# the same words.
-NO_PLAN_LINE_PREFIX = "No plan ("
-ROLES_THAT_READ_THE_PLAN = ["builder.md", "reviewer.md", "tester.md", "security.md", "ops.md"]
-
-
-def test_every_role_that_reads_the_plan_says_what_to_do_without_one():
-    lines = {role_file: [line for line in section(role_file, READ_FIRST_HEADING).splitlines()
-                         if line.startswith(NO_PLAN_LINE_PREFIX)]
-             for role_file in ROLES_THAT_READ_THE_PLAN}
-    for role_file, found in lines.items():
-        assert len(found) == 1, f"{role_file}'s Read first does not say once what to do with no plan"
-    assert len({found[0] for found in lines.values()}) == 1, (
-        "the roles say in different words what to do with no plan")
+def test_no_role_file_still_says_a_low_stops_at_no_gate(role_file):
+    assert RETIRED_LOW_SENTENCE not in (AGENTS_DIR / role_file).read_text()
 
 
 def test_the_verdict_each_table_gives_for_a_high_is_one_the_tripwire_counts():
@@ -735,13 +715,13 @@ def test_the_verdict_each_table_gives_for_a_high_is_one_the_tripwire_counts():
 # ---------------------------------------------------------------------------
 
 # Each repo's own threat model, beside its profile. Every role reads the copy
-# on the task's base branch; the rules for rating against it are one block,
+# at the task's base commit; the rules for rating against it are one block,
 # word for word, in the four files whose roles rate or answer findings.
 THREAT_MODEL_FILE = ".relay/threat-model.md"
 RELAYS_THREAT_MODEL = AGENTS_DIR.parent / THREAT_MODEL_FILE
 PROFILE_DOC = AGENTS_DIR.parent / "docs" / "profile.md"
 READ_FIRST_HEADING = "## Read first"
-THE_BASE_GOVERNS = "base branch"
+THE_BASE_GOVERNS = "base commit"
 THREAT_MODEL_HEADING = "## Threat model and ratings"
 THREAT_MODEL_ROLE_FILES = ["builder.md", "reviewer.md", "tester.md", "security.md"]
 # The rules of the block, by the bold label each one starts with.
@@ -796,8 +776,8 @@ def test_relays_threat_model_file_and_its_description():
     description = PROFILE_DOC.read_text().split("\n## Threat model\n", 1)
     assert len(description) == 2, "docs/profile.md has no Threat model section"
     said = description[1].split("\n## ", 1)[0]
-    for words in (THREAT_MODEL_FILE, "base branch", "strictest default", "When there is none",
-                  f"git show {{base}}:{THREAT_MODEL_FILE}"):
+    for words in (THREAT_MODEL_FILE, "base commit", "strictest default", "When there is none",
+                  f"git show <commit>:{THREAT_MODEL_FILE}"):
         assert words in said, f"docs/profile.md's Threat model section does not say {words!r}"
 
 
@@ -806,7 +786,18 @@ def test_every_role_reads_the_threat_model_at_the_base(role_file):
     read_first = section(role_file, READ_FIRST_HEADING)
     items = [line for line in read_first.splitlines() if THREAT_MODEL_FILE in line]
     assert len(items) == 1, f"{role_file} does not name {THREAT_MODEL_FILE} once in Read first"
-    assert THE_BASE_GOVERNS in items[0], f"{role_file} does not say the base branch's copy governs"
+    assert THE_BASE_GOVERNS in items[0], f"{role_file} does not say the base commit's copy governs"
+
+
+def test_no_role_file_reads_the_threat_model_by_branch_name():
+    """A base read by name can be a case twin's commit on this Mac's disk;
+    every role reads the threat model at the base commit its prompt gives."""
+    for role_file in ROLE_FILES:
+        text = (AGENTS_DIR / role_file).read_text()
+        assert "git show {base}:" not in text, role_file
+        assert "base branch, which governs" not in text, role_file
+    for role_file in ("designer.md", "architect.md", "ops.md", *THREAT_MODEL_ROLE_FILES):
+        assert f"git show <commit>:{THREAT_MODEL_FILE}" in (AGENTS_DIR / role_file).read_text(), role_file
 
 
 @pytest.mark.parametrize("first, second", list(combinations(THREAT_MODEL_ROLE_FILES, 2)))
@@ -922,3 +913,82 @@ def test_record_is_the_default_mark(role_file):
         f"{role_file}: Fix now does not ask the owner to override, with a reason")
 
 
+
+
+# ---------------------------------------------------------------------------
+# The Arbiter: judgment, not a rulebook
+# ---------------------------------------------------------------------------
+
+ARBITER = "arbiter.md"
+NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+# Each principle the owner gave, by a phrase its paragraph must hold.
+ARBITER_PRINCIPLES = ("Judge consequence, not labels", "Notice drift and disagreement",
+                      "Hold to the brief", "senior engineer shipping this for real users",
+                      "Weigh your own earlier rulings", "Never weaken the owner's hard rules")
+ARBITER_SECTIONS = ("## Read first", "## Where you are called, and the calls open there",
+                    "## Principles", "## Group the findings by issue",
+                    "## What each call must contain", "## When the call is the owner's")
+ARBITER_CALLS = ("**Move on**", "**Targeted round**", "**Re-plan**", "**Escalate**")
+ARBITER_SITUATIONS = ("**A loop.**", "**A warning gate.**")
+
+
+def arbiter_guidance() -> str:
+    """The Arbiter's guidance: its file without the frontmatter, the shared
+    rules and the Output section, where a template's numbers belong."""
+    text = (AGENTS_DIR / ARBITER).read_text()
+    body = text.split("---\n", 2)[2]
+    return body.split("## Output\n", 1)[0].replace(SHARED_RULES, "")
+
+
+def test_the_arbiter_role_file_names_no_count_that_decides_a_call():
+    """The owner's words: "its judgment, not deterministic". The guidance
+    holds no table, no number and no number word, so nothing in it reads as
+    "if N or more, then X"."""
+    guidance = arbiter_guidance()
+    assert guidance.strip(), "arbiter.md has no guidance"
+    rows = [line for line in guidance.splitlines() if line.lstrip().startswith("|")]
+    digits = re.findall(r".{0,30}[0-9].{0,10}", guidance)
+    words = re.findall(rf"\b({'|'.join(NUMBER_WORDS)})\b", guidance, re.IGNORECASE)
+    assert not rows, f"arbiter.md maps something in a table: {rows}"
+    assert not digits, f"arbiter.md's guidance holds a number: {digits}"
+    assert not words, f"arbiter.md's guidance holds a number word: {words}"
+
+
+def test_the_arbiter_role_file_states_each_principle_and_section():
+    guidance = arbiter_guidance()
+    for words in ARBITER_PRINCIPLES + ARBITER_SECTIONS + ARBITER_CALLS + ARBITER_SITUATIONS:
+        assert words in guidance, f"arbiter.md does not say {words!r}"
+    template = output_template(ARBITER)
+    for heading in ("Summary for the owner:", "## Findings by issue", "## Reasoning", "## Ruling"):
+        assert heading in template, f"arbiter.md's report has no {heading!r}"
+
+
+SIZING_TEMPLATE_LINES = ("# sizing: raise", "# size: feature | project", "# risky: yes",
+                         "# sizing_reason: {one line}")
+
+
+def test_reviewer_sizing_section_names_the_categories_and_no_path_rule():
+    """The Reviewer judges the sizing from the diff,
+    with the path hint as a pointer. The section names the seven categories
+    in words and holds no rule that a matching path means a raise."""
+    import project_profile
+    guidance = section("reviewer.md", "## Sizing")
+    assert guidance, "reviewer.md has no Sizing section"
+    for words in project_profile.RISK_CATEGORY_WORDS.values():
+        assert words in guidance, f"reviewer.md's Sizing section does not name {words!r}"
+    lowered = " ".join(guidance.lower().split())
+    for rule in ("if a path matches", "if the hint matches", "when a path matches",
+                 "a matching path means", "if any path", "raise whenever"):
+        assert rule not in lowered, f"reviewer.md's Sizing section reads as a path rule: {rule!r}"
+    assert "only the owner lowers" in lowered
+    template = output_template("reviewer.md")
+    for line in SIZING_TEMPLATE_LINES:
+        assert line in template, f"reviewer.md's template has no {line!r}"
+    assert "# sizing: raise | keep" in template
+
+
+def test_the_arbiter_may_raise_the_sizing_in_its_frontmatter():
+    template = output_template(ARBITER)
+    for line in SIZING_TEMPLATE_LINES:
+        assert line in template, f"arbiter.md's template has no {line!r}"
+    assert "a raise applies whatever you decide" in arbiter_guidance()

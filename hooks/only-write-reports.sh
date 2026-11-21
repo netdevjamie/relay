@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # PreToolUse hook for Relay's read-only roles (Designer, Architect, Reviewer,
-# Security, Ops). They may write their own report, which lives in the task's
+# Security, Ops, Arbiter). They may write their own report, which lives in the task's
 # folder under Relay's install, and scratch files in a temporary folder
-# (the role files send long commands there), and nothing else. Any other
-# Write is refused (exit 2: Claude Code blocks the call and shows the role
-# this message).
+# (the role files send long commands there), and nothing else. Any other Write is refused
+# (exit 2: Claude Code blocks the call and shows the role this message).
 #
 # Claude Code passes the tool call as JSON on stdin; the path is
-# tool_input.file_path. A call this script cannot read is refused too.
+# tool_input.file_path. A call this script cannot read is refused as well.
 set -u
 RELAY_HOME="${RELAY_HOME:-$HOME/Projects/.relay}"
 # Fail closed: with no python3 the call cannot be checked, so it is refused.

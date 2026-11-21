@@ -26,11 +26,9 @@ You work in one of two modes. Relay dispatches Prepare only; Execute runs only w
 
 1. The Architect's plan, the brief's acceptance criteria, and every earlier artifact for this task.
 2. The project profile (`.relay/profile.yaml`): build command, deploy targets with their commands, smoke tests, rollback steps, required CLIs and credentials, stores and release scripts.
-3. The repo's threat model (`.relay/threat-model.md`) as it is on the task's base branch, which governs (`git show {base}:.relay/threat-model.md`, the base your task prompt names). When there is none, Relay's roles work to the strictest default, which the Builder, Reviewer, Tester and Security files define.
+3. The repo's threat model (`.relay/threat-model.md`) as it is at the task's base commit, which governs (`git show <commit>:.relay/threat-model.md`, the base commit your task prompt names). When there is none, Relay's roles work to the strictest default, which the Builder, Reviewer, Tester and Security files define.
 4. The changed files that affect deployment: configuration, migrations, dependency files, build and CI settings.
 5. The repo's own deploy or install notes, where it keeps any (a `DEPLOYMENT.md`, say): a rule there on when or how to install stands beside the profile's steps.
-
-No plan (a fix, or most features)? Work from the brief; the pass is the Designer's suggestion, else `right`.
 
 ## Prepare mode
 

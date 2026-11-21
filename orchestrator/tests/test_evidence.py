@@ -5,9 +5,7 @@ own run of the profile's test command. A run that fails, times out, or finds
 uncommitted work sends the task back to the Builder.
 """
 
-import json
 import os
-import subprocess
 import sys
 import time
 import unicodedata
@@ -17,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import base_trust
 import db
 import evidence
 import settings
@@ -30,43 +29,21 @@ from project_profile import check_profile, load_profile
 from tests.hostile_yaml import (  # noqa: F401  (nothing_composed is a fixture)
     BAD_VALUE_NAMES, BAD_VALUES, SECURITYS_MERGE_KEYS, nothing_composed,
 )
+from tests.git_fixtures import build_in, commit_all, commit_of, git, repo, write_profile  # noqa: F401  (repo is a fixture)
 from tests.test_send_back import UP_TO_REVIEW, config, events_of_type, finish_step, task_at  # noqa: F401  (config is a fixture)
 
-RUN_KEYS = {"outcome", "reason", "commit", "command", "test_report", "command_differs_from_base", "base_command",
-            "base_profile_unread", "exit_code", "duration_seconds", "counts", "log"}
+# The keys every recorded run has had, in the order they are stored.
+FIRST_RUN_KEYS = ["outcome", "reason", "commit", "command", "test_report", "command_differs_from_base",
+                  "base_command", "base_profile_unread", "exit_code", "duration_seconds", "counts", "log"]
+# Keys added after them, each "not flagged" by default.
+LATER_RUN_KEYS = ["tests_run", "counts_unchecked", "harness_changed", "harness_digest",
+                  "previous_tests_run", "base_commit", "base_tests_run", "base_count_unknown",
+                  "tests_drop", "clean_checkout", "ignored_present", "seen_to_fail", "base_log",
+                  "seen_to_fail_log", "harness_unchecked"]
+RUN_KEYS = set(FIRST_RUN_KEYS) | set(LATER_RUN_KEYS)
 
 JUNIT = ('<testsuites><testsuite tests="5" failures="1" errors="0" skipped="2"/>'
          '<testsuite tests="3" failures="0" errors="1" skipped="0"/></testsuites>')
-
-
-def git(repo: Path, *args: str) -> str:
-    done = subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
-                          cwd=repo, capture_output=True, text=True, check=True)
-    return done.stdout.strip()
-
-
-def write_profile(repo: Path, test_command: str, extra: str = "") -> None:
-    (repo / ".relay").mkdir(exist_ok=True)
-    (repo / ".relay" / "profile.yaml").write_text(
-        f"schema_version: 1\ncommands:\n  test: {json.dumps(test_command)}\n{extra}")
-
-
-def commit_all(repo: Path, message: str = "work") -> str:
-    git(repo, "add", "-A")
-    git(repo, "commit", "-q", "-m", message)
-    return git(repo, "rev-parse", "HEAD")
-
-
-@pytest.fixture
-def repo(tmp_path) -> Path:
-    """A git repo on `main` with a profile whose tests pass."""
-    path = tmp_path / "repo"
-    path.mkdir()
-    git(path, "init", "-q", "-b", "main")
-    (path / ".gitignore").write_text("reports/\n")
-    write_profile(path, "echo all good")
-    commit_all(path, "start")
-    return path
 
 
 class TestParseJunitReport:
@@ -101,26 +78,26 @@ class TestParseJunitReport:
 class TestRunTests:
     def test_passing_run_records_commit_command_and_log(self, repo, tmp_path):
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert set(run) == RUN_KEYS
-        assert (run["outcome"], run["exit_code"], run["command"]) == ("passed", 0, "echo all good")
-        assert run["commit"] == git(repo, "rev-parse", "HEAD")
-        assert run["counts"] is None
+        assert set(run.to_record()) == RUN_KEYS
+        assert (run.outcome, run.exit_code, run.command) == ("passed", 0, "echo all good")
+        assert run.commit == git(repo, "rev-parse", "HEAD")
+        assert run.counts is None
         assert (tmp_path / "log.txt").read_text() == "all good\n"
 
     def test_failing_run_keeps_the_exit_code_and_output(self, repo, tmp_path):
         write_profile(repo, "echo boom; exit 3")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert (run["outcome"], run["exit_code"]) == ("failed", 3)
+        assert (run.outcome, run.exit_code) == ("failed", 3)
         assert "boom" in evidence.log_tail(tmp_path / "log.txt")
-        assert "FAILED (exit code 3)" in evidence.summary(run)
+        assert "FAILED (exit code 3)" in evidence.summary(run.to_record())
 
     def test_a_run_past_the_time_limit_is_stopped(self, repo, tmp_path):
         write_profile(repo, "sleep 30")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt", timeout_seconds=1)
-        assert (run["outcome"], run["exit_code"]) == ("timed_out", None)
-        assert run["duration_seconds"] < 10
+        assert (run.outcome, run.exit_code) == ("timed_out", None)
+        assert run.duration_seconds < 10
 
     def test_uncommitted_work_is_not_tested(self, repo, tmp_path):
         marker = tmp_path / "ran"
@@ -128,27 +105,27 @@ class TestRunTests:
         commit_all(repo)
         (repo / "new_file.py").write_text("x = 1\n")
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert run["outcome"] == "uncommitted"
-        assert "new_file.py" in run["reason"]
+        assert run.outcome == "uncommitted"
+        assert "new_file.py" in run.reason
         assert not marker.exists()
 
     def test_no_profile_or_a_bad_one_is_not_run(self, repo, tmp_path):
         (repo / ".relay" / "profile.yaml").write_text("schema_version: 1\n")
         commit_all(repo)
-        assert evidence.run_tests(repo, tmp_path / "log.txt")["outcome"] == "not_run"
+        assert evidence.run_tests(repo, tmp_path / "log.txt").outcome == "not_run"
         git(repo, "rm", "-q", ".relay/profile.yaml")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert (run["outcome"], run["command"]) == ("not_run", None)
-        assert "no project profile" in run["reason"]
+        assert (run.outcome, run.command) == ("not_run", None)
+        assert "no project profile" in run.reason
 
     def test_counts_come_from_the_report_this_run_wrote(self, repo, tmp_path):
         write_profile(repo, f"mkdir -p reports && echo '{JUNIT}' > reports/junit.xml",
                       "test_report: reports/junit.xml\n")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert run["counts"] == {"tests": 8, "failures": 1, "errors": 1, "skipped": 2}
-        assert "8 tests, 2 failed, 2 skipped" in evidence.summary(run)
+        assert run.counts == {"tests": 8, "failures": 1, "errors": 1, "skipped": 2}
+        assert "8 tests, 2 failed, 2 skipped" in evidence.summary(run.to_record())
 
     def test_a_report_left_over_from_an_earlier_run_is_ignored(self, repo, tmp_path):
         (repo / "reports").mkdir()
@@ -158,57 +135,67 @@ class TestRunTests:
         write_profile(repo, "true", "test_report: reports/junit.xml\n")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert (run["outcome"], run["counts"]) == ("passed", None)
-        assert "counts unknown" in evidence.summary(run)
+        # The stale file gives no counts, so the run wrote no report of its
+        # own: a named report that is not written is a failure.
+        assert (run.outcome, run.exit_code, run.counts) == ("failed", 0, None)
+        assert run.reason.startswith("The profile names reports/junit.xml, but this run did not write")
+        assert "counts unknown" in evidence.summary(run.to_record())
 
     def test_a_changed_test_command_is_flagged(self, repo, tmp_path):
-        assert evidence.run_tests(repo, tmp_path / "log.txt", base="main")[
-            "command_differs_from_base"] is False
+        assert evidence.run_tests(repo, tmp_path / "log.txt", base_commit=commit_of(repo)).command_differs_from_base is False
         git(repo, "checkout", "-q", "-b", "relay/task")
         write_profile(repo, "true")
         commit_all(repo)
-        run = evidence.run_tests(repo, tmp_path / "log.txt", base="main")
-        assert run["command_differs_from_base"] is True
-        assert "is not the base branch's" in evidence.summary(run)
+        run = evidence.run_tests(repo, tmp_path / "log.txt", base_commit=commit_of(repo))
+        assert run.command_differs_from_base is True
+        assert "is not the base branch's" in evidence.summary(run.to_record())
 
     def test_a_changed_report_path_or_a_base_without_a_profile_is_flagged_too(self, repo, tmp_path):
         git(repo, "checkout", "-q", "-b", "relay/task")
         write_profile(repo, "echo all good", "test_report: reports/junit.xml\n")
         commit_all(repo)
-        assert evidence.run_tests(repo, tmp_path / "log.txt", base="main")[
-            "command_differs_from_base"] is True
-        assert evidence.run_tests(repo, tmp_path / "log.txt", base="no-such-branch")[
-            "command_differs_from_base"] is True
-        assert evidence.run_tests(repo, tmp_path / "log.txt", base=None)[
-            "command_differs_from_base"] is False
+        assert evidence.run_tests(repo, tmp_path / "log.txt", base_commit=commit_of(repo)).command_differs_from_base is True
+        assert evidence.run_tests(repo, tmp_path / "log.txt",
+                                  base_commit="0" * 40).command_differs_from_base is True
+        assert evidence.run_tests(repo, tmp_path / "log.txt", base_commit=None).command_differs_from_base is False
+
+    @pytest.mark.parametrize("not_a_commit", ["main", "refs/heads/main", "-main", "0" * 39, "0" * 40 + "\n",
+                                              "", "G" * 40])
+    def test_a_base_that_is_not_a_full_commit_id_is_refused_never_looked_up(
+            self, repo, tmp_path, not_a_commit):
+        """The run takes the base commit Relay confirmed (base_trust.py);
+        a name handed to it is a caller's mistake, never a git lookup."""
+        with pytest.raises(ValueError):
+            evidence.run_tests(repo, tmp_path / "log.txt", base_commit=not_a_commit)
+        assert evidence.fork_point(repo, not_a_commit) is None
 
     def test_a_run_that_leaves_files_behind_is_not_accepted(self, repo, tmp_path):
         write_profile(repo, "echo junk > leftover.txt")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert (run["outcome"], run["exit_code"]) == ("uncommitted", 0)
-        assert "leftover.txt" in run["reason"] and ".gitignore" in run["reason"]
+        assert (run.outcome, run.exit_code) == ("uncommitted", 0)
+        assert "leftover.txt" in run.reason and ".gitignore" in run.reason
 
     def test_a_failed_run_that_leaves_files_behind_is_still_a_failure(self, repo, tmp_path):
         write_profile(repo, "echo junk > leftover.txt; exit 2")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert (run["outcome"], run["exit_code"]) == ("failed", 2)
-        assert "leftover.txt" in run["reason"]
+        assert (run.outcome, run.exit_code) == ("failed", 2)
+        assert "leftover.txt" in run.reason
 
     def test_a_branch_that_removes_or_breaks_its_bases_profile_is_not_let_off(self, repo, tmp_path):
         git(repo, "checkout", "-q", "-b", "relay/task")
         (repo / ".relay" / "profile.yaml").write_text("schema_version: 1\ncomands: {}\n")
         commit_all(repo)
-        broken = evidence.run_tests(repo, tmp_path / "log.txt", base="main")
-        assert (broken["outcome"], broken["base_command"]) == ("profile_broken", "echo all good")
-        assert "profile with errors" in broken["reason"]
+        broken = evidence.run_tests(repo, tmp_path / "log.txt", base_commit=commit_of(repo))
+        assert (broken.outcome, broken.base_command) == ("profile_broken", "echo all good")
+        assert "profile with errors" in broken.reason
         git(repo, "rm", "-q", ".relay/profile.yaml")
         commit_all(repo)
-        removed = evidence.run_tests(repo, tmp_path / "log.txt", base="main")
-        assert removed["outcome"] == "profile_broken"
-        assert "has no project profile" in removed["reason"]
-        assert removed["outcome"] in evidence.FAILING_OUTCOMES
+        removed = evidence.run_tests(repo, tmp_path / "log.txt", base_commit=commit_of(repo))
+        assert removed.outcome == "profile_broken"
+        assert "has no project profile" in removed.reason
+        assert removed.outcome in evidence.FAILING_OUTCOMES
 
     def test_a_profile_change_on_the_base_after_the_task_started_is_not_flagged(self, repo, tmp_path):
         git(repo, "checkout", "-q", "-b", "relay/task")
@@ -218,8 +205,8 @@ class TestRunTests:
         write_profile(repo, "echo newer command on main")
         commit_all(repo)
         git(repo, "checkout", "-q", "relay/task")
-        run = evidence.run_tests(repo, tmp_path / "log.txt", base="main")
-        assert (run["command_differs_from_base"], run["base_command"]) == (False, "echo all good")
+        run = evidence.run_tests(repo, tmp_path / "log.txt", base_commit=commit_of(repo))
+        assert (run.command_differs_from_base, run.base_command) == (False, "echo all good")
 
     @pytest.mark.parametrize("hostile, reason", list(zip([SECURITYS_MERGE_KEYS, *BAD_VALUES], [
         "it holds a YAML anchor, alias or merge key (&name, *name or an unquoted <<).",
@@ -230,26 +217,27 @@ class TestRunTests:
     ], strict=True)), ids=["Security's merge keys", *BAD_VALUE_NAMES])
     def test_a_base_profile_relay_does_not_read_gives_no_base_command_and_never_raises(
             self, repo, tmp_path, nothing_composed, hostile, reason):
-        """Hostile YAML in the reader of the profile at the task's base.
-        With no base command the branch's is flagged as not the base's, for the owner to confirm."""
+        """Hostile YAML in the reader of the
+        profile at the task's base. With no base command the branch's is
+        flagged as not the base's, for the owner to confirm."""
         write_profile(repo, "echo all good", hostile)
         commit_all(repo, "a base profile Relay does not read")
         git(repo, "checkout", "-q", "-b", "relay/task")
         write_profile(repo, "echo all good")
         commit_all(repo)
         started = time.monotonic()
-        assert evidence.base_profile(repo, "main") == (None, reason)
+        assert evidence.base_profile(repo, commit_of(repo)) == (None, reason)
         assert time.monotonic() - started < 2
-        run = evidence.run_tests(repo, tmp_path / "log.txt", base="main")
-        assert (run["outcome"], run["command_differs_from_base"]) == ("passed", True)
+        run = evidence.run_tests(repo, tmp_path / "log.txt", base_commit=commit_of(repo))
+        assert (run.outcome, run.command_differs_from_base) == ("passed", True)
 
     def test_a_base_profile_that_is_not_utf8_gives_no_base_command_and_never_raises(self, repo):
-        """git's answer is decoded with room for bytes that are not UTF-8,
-        so such a profile does not end the run."""
+        """Git's answer was once decoded
+        as UTF-8 with no room for other bytes, and the error ended the run."""
         (repo / ".relay" / "profile.yaml").write_bytes(
             b'schema_version: 1\ncommands:\n  test: "echo all good"\n# \xff\n')
         commit_all(repo, "a base profile that is not UTF-8")
-        assert evidence.base_profile(repo, "main") == (None, "it is not UTF-8.")
+        assert evidence.base_profile(repo, commit_of(repo)) == (None, "it is not UTF-8.")
 
     def test_a_base_profile_over_the_size_limit_is_never_shown_or_parsed(self, repo, monkeypatch):
         write_profile(repo, "echo all good", "#" + "x" * project_profile.MAX_PROFILE_BYTES + "\n")
@@ -260,15 +248,42 @@ class TestRunTests:
                             or real_git(worktree, *args))
         monkeypatch.setattr(project_profile.bounded_yaml.yaml, "parse",
                             lambda text, **options: parsed.append(len(text)) or iter(()))
-        assert evidence.base_profile(repo, "main") == (None, "it is larger than 64 KB.")
+        assert evidence.base_profile(repo, commit_of(repo)) == (None, "it is larger than 64 KB.")
         assert (asked, parsed) == (["merge-base", "cat-file"], [])
 
     def test_a_run_that_moves_the_branch_is_not_accepted(self, repo, tmp_path):
         write_profile(repo, "git -c user.name=T -c user.email=t@example.com commit -q --allow-empty -m sneaky")
         commit_all(repo)
         run = evidence.run_tests(repo, tmp_path / "log.txt")
-        assert run["outcome"] == "uncommitted"
-        assert "different commit" in run["reason"]
+        assert run.outcome == "uncommitted"
+        assert "different commit" in run.reason
+
+
+class TestTheRunResult:
+    def test_every_outcome_is_a_TestRun_whose_record_starts_with_the_twelve_stored_keys_in_order(
+            self, repo, tmp_path):
+        """One definition of the fields for every outcome, not_run included,
+        and the stored record keeps today's twelve keys first, in order."""
+        runs = {"not_run": evidence.not_run("nothing to run")}
+        runs["passed"] = evidence.run_tests(repo, tmp_path / "log.txt")
+        write_profile(repo, "exit 3")
+        commit_all(repo)
+        runs["failed"] = evidence.run_tests(repo, tmp_path / "log.txt")
+        write_profile(repo, "sleep 30")
+        commit_all(repo)
+        runs["timed_out"] = evidence.run_tests(repo, tmp_path / "log.txt", timeout_seconds=1)
+        (repo / "loose.py").write_text("x = 1\n")
+        runs["uncommitted"] = evidence.run_tests(repo, tmp_path / "log.txt")
+        assert {name: run.outcome for name, run in runs.items()} == {name: name for name in runs}
+        for run in runs.values():
+            assert type(run) is evidence.TestRun
+            assert list(run.to_record()) == FIRST_RUN_KEYS + LATER_RUN_KEYS
+
+    def test_a_record_lacking_the_later_keys_reads_as_not_flagged(self):
+        old = {key: None for key in FIRST_RUN_KEYS}
+        old.update(outcome="passed", command_differs_from_base=False, exit_code=0,
+                   duration_seconds=1.0, counts={"tests": 2, "failures": 0, "errors": 0, "skipped": 0})
+        assert evidence.summary(old) == "Tests passed at no commit in 1.0s: 2 tests, 0 failed, 0 skipped."
 
 
 class TestProfileTestReport:
@@ -298,12 +313,10 @@ class TestProfileTestReport:
 def task_in_repo(task_id: str, config: dict, repo: Path, verdicts) -> None:
     """Like task_at, with the task's worktree pointed at `repo` from the start."""
     task_at(task_id, config, [])
-    state = run_state.load_run_state(task_id, config)
-    state["worktree_path"], state["base"] = str(repo), "main"
-    run_state.save_run_state(task_id, state, config)
+    build_in(task_id, config, repo, branch=None)
     for verdict, extra_frontmatter in verdicts:
         finish_step(task_id, config, verdict, extra_frontmatter)
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
 
 
 UP_TO_BUILD = UP_TO_REVIEW[:-1]
@@ -344,7 +357,7 @@ class TestRelayNextRunsTheTests:
         task_in_repo("dirty", config, repo, UP_TO_BUILD)
         (repo / "forgot_to_commit.py").write_text("x = 1\n")
         finish_step("dirty", config, "ready-for-review")
-        commands.cmd_next("dirty", auto=False, config=config)
+        assert commands.cmd_next("dirty", auto=False, config=config) == 0
         assert current("dirty", config) == ("in_progress", "builder")
         assert read_api.status_payload("dirty", config)["test_runs"][0]["outcome"] == "uncommitted"
 
@@ -353,7 +366,7 @@ class TestRelayNextRunsTheTests:
         write_profile(repo, "exit 1")
         commit_all(repo)
         finish_step("late", config, "pass")
-        commands.cmd_next("late", auto=False, config=config)
+        assert commands.cmd_next("late", auto=False, config=config) == 0
         assert current("late", config) == ("in_progress", "builder")
         outcomes = [(run["phase"], run["outcome"])
                     for run in read_api.status_payload("late", config)["test_runs"]]
@@ -387,6 +400,7 @@ class TestRelayNextRunsTheTests:
     def test_the_same_commit_is_not_tested_twice(self, config, repo):
         task_in_repo("once", config, repo, UP_TO_BUILD)
         state = run_state.load_run_state("once", config)
+        assert base_trust.check_before_step("once", state, config) is None   # as every step does
         first = recorded_runs.ensure_test_run("once", state, "builder", "ready-for-review", 3, config)
         again = recorded_runs.ensure_test_run("once", state, "builder", "ready-for-review", 3, config)
         assert first == again
@@ -415,7 +429,7 @@ def task_on_branch(task_id: str, config: dict, repo: Path, test_command: str) ->
     write_profile(repo, test_command)
     commit_all(repo)
     finish_step(task_id, config, "ready-for-review")
-    commands.cmd_next(task_id, auto=False, config=config)
+    assert commands.cmd_next(task_id, auto=False, config=config) == 0
 
 
 class TestAChangedTestCommandNeedsTheOwner:
@@ -432,31 +446,31 @@ class TestAChangedTestCommandNeedsTheOwner:
 
     def test_one_approval_covers_the_rest_of_the_task(self, config, repo, capsys):
         task_on_branch("swap-ok", config, repo, "true")
-        commands.cmd_override("swap-ok", "reviewer", config)
+        assert commands.cmd_override("swap-ok", "reviewer", config) == 0
         assert "Relay's recorded test run: Tests passed" in capsys.readouterr().out
         for verdict in ("approved", "pass"):
             finish_step("swap-ok", config, verdict)
-            commands.cmd_next("swap-ok", auto=False, config=config)
+            assert commands.cmd_next("swap-ok", auto=False, config=config) == 0
         assert current("swap-ok", config) == ("in_progress", "security")
 
     def test_changing_the_command_again_asks_again(self, config, repo):
         task_on_branch("swap-twice", config, repo, "true")
-        commands.cmd_override("swap-twice", "reviewer", config)
+        assert commands.cmd_override("swap-twice", "reviewer", config) == 0
         finish_step("swap-twice", config, "approved")
-        commands.cmd_next("swap-twice", auto=False, config=config)
+        assert commands.cmd_next("swap-twice", auto=False, config=config) == 0
         write_profile(repo, "exit 0")
         commit_all(repo)
         finish_step("swap-twice", config, "pass")
-        commands.cmd_next("swap-twice", auto=False, config=config)
+        assert commands.cmd_next("swap-twice", auto=False, config=config) == 0
         assert current("swap-twice", config) == ("in_progress", "tester")
         assert read_api.gate_check_payload("swap-twice", config)["gate"]["state"] == "waiting_on_owner"
 
     def test_an_override_to_another_phase_accepts_nothing(self, config, repo):
         task_on_branch("swap-other", config, repo, "true")
-        commands.cmd_override("swap-other", "builder", config)
+        assert commands.cmd_override("swap-other", "builder", config) == 0
         assert events_of_type("swap-other", db.EVENT_TEST_COMMAND_ACCEPTED) == []
         finish_step("swap-other", config, "ready-for-review")
-        commands.cmd_next("swap-other", auto=False, config=config)
+        assert commands.cmd_next("swap-other", auto=False, config=config) == 0
         assert read_api.gate_check_payload("swap-other", config)["gate"]["state"] == "waiting_on_owner"
 
     def test_the_acceptance_is_recorded_with_the_exact_command(self, config, repo, capsys):
@@ -464,7 +478,7 @@ class TestAChangedTestCommandNeedsTheOwner:
         out = capsys.readouterr().out
         assert "This task changed how the repo is tested." in out
         assert "The base branch's test command: echo all good" in out
-        commands.cmd_override("swap-exact", "reviewer", config)
+        assert commands.cmd_override("swap-exact", "reviewer", config) == 0
         accepted = events_of_type("swap-exact", db.EVENT_TEST_COMMAND_ACCEPTED)
         assert [(event["phase"], event["step"]) for event in accepted] == [("builder", 3)]
         assert accepted[0]["payload"] == {"command": "true", "test_report": None,
@@ -480,8 +494,8 @@ class TestAChangedTestCommandNeedsTheOwner:
     ], ids=["a date that does not exist", "Security's merge keys", "over the size limit", "not UTF-8"])
     def test_a_base_profile_relay_refused_is_said_with_its_reason_beside_the_base_command(
             self, config, repo, capsys, base_profile, reason):
-        """docs/profile.md says a refused base profile is reported as one
-        Relay could not read."""
+        """docs/profile.md says a refused base
+        profile is reported as one Relay could not read."""
         (repo / ".relay" / "profile.yaml").write_bytes(base_profile)
         commit_all(repo, "a base profile Relay refuses")
         task_on_branch("refused-base", config, repo, "true")
@@ -529,13 +543,14 @@ class TestAChangedTestCommandNeedsTheOwner:
         """An approval the owner gave for something else must not count."""
         task_in_repo("swap-later", config, repo, UP_TO_REVIEW)
         finish_step("swap-later", config, "approved_with_warnings")
-        commands.cmd_next("swap-later", auto=False, config=config)
-        commands.cmd_override("swap-later", "tester", config)
+        config["human_gates"]["reviewer_approved_with_warnings"] = True
+        assert commands.cmd_next("swap-later", auto=False, config=config) == 0
+        assert commands.cmd_override("swap-later", "tester", config) == 0
         git(repo, "checkout", "-q", "-b", "relay/swap-later")
         write_profile(repo, "true")
         commit_all(repo)
         finish_step("swap-later", config, "pass")
-        commands.cmd_next("swap-later", auto=False, config=config)
+        assert commands.cmd_next("swap-later", auto=False, config=config) == 0
         assert events_of_type("swap-later", db.EVENT_TEST_COMMAND_ACCEPTED) == []
         assert read_api.gate_check_payload("swap-later", config)["gate"]["state"] == "waiting_on_owner"
 
@@ -545,7 +560,7 @@ class TestAChangedTestCommandNeedsTheOwner:
         git(repo, "rm", "-q", ".relay/profile.yaml")
         commit_all(repo)
         finish_step("no-tests", config, "ready-for-review")
-        commands.cmd_next("no-tests", auto=False, config=config)
+        assert commands.cmd_next("no-tests", auto=False, config=config) == 0
         assert current("no-tests", config) == ("in_progress", "builder")
         assert read_api.status_payload("no-tests", config)["test_runs"][-1]["outcome"] == "profile_broken"
 
@@ -556,9 +571,9 @@ class TestAChangedTestCommandNeedsTheOwner:
 
     def test_sending_it_back_is_not_a_confirmation(self, config, repo):
         task_on_branch("swap-back", config, repo, "true")
-        commands.cmd_send_back("swap-back", config, note="put the real tests back")
+        assert commands.cmd_send_back("swap-back", config, note="put the real tests back") == 0
         finish_step("swap-back", config, "ready-for-review")
-        commands.cmd_next("swap-back", auto=False, config=config)
+        assert commands.cmd_next("swap-back", auto=False, config=config) == 0
         assert read_api.gate_check_payload("swap-back", config)["gate"]["state"] == "waiting_on_owner"
 
 

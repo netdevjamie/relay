@@ -5,31 +5,9 @@ Relay: a multi-agent workflow orchestrator.
 Manages state, routing, artifact numbering, and agent invocation
 across multiple registered repositories from a single install.
 
-Usage:
-    relay start <task-id> --repo <alias> [--worktree PATH] [--base <branch>] [--deploy]
-    relay next <task-id> [--auto]
-    relay status <task-id> [--json]
-    relay list [--json]
-    relay waiting
-    relay card <task-id>
-    relay show <task-id> <report>
-    relay decide <task-id> <choice> --step N --gate KIND [--to PHASE] [--note TEXT | --note-file FILE]
-    relay send-back <task-id>
-    relay note <task-id> --note TEXT | --note-file FILE
-    relay override <task-id> <phase>
-    relay abort <task-id>
-    relay gate-check <task-id> [--json]
-    relay validate <task-id>
-    relay recover <task-id>
-    relay proto start <name> --repo <alias> --idea TEXT [--hours N]
-    relay proto done <name>
-    relay proto list
-    relay promote <name> --size feature|project --risky yes|no [--as TASK_ID] [--deploy]
-    relay profile <alias-or-path>
-    relay register <repo-path> [--alias <name>]
-    relay doctor
-
-Run `relay --help` for every option.
+The `relay` command's argument parsing and entry point. Every command is
+listed in the help text below (`relay --help`) and documented with an
+example in docs/commands.md.
 """
 
 import argparse
@@ -43,7 +21,7 @@ from doctor import run_doctor
 from read_api import TaskNotFound
 from commands import (
     JSON_COMMANDS, cmd_abort, cmd_card, cmd_decide, cmd_gate_check, cmd_list,
-    cmd_next, cmd_note, cmd_override, cmd_profile, cmd_recover, cmd_register,
+    cmd_next, cmd_note, cmd_override, cmd_profile, cmd_recover, cmd_register, cmd_resize,
     cmd_send_back, cmd_show, cmd_start, cmd_status, cmd_validate, cmd_waiting, run_json_command,
 )
 from settings import PIPELINE_ORDER
@@ -82,6 +60,13 @@ def run_proto(args, parser) -> int:
     return 0
 
 
+def exit_on_failure(exit_code: int) -> None:
+    """End the process with a command's exit code when it is not 0. A
+    command that succeeds returns normally."""
+    if exit_code:
+        sys.exit(exit_code)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Relay: a multi-agent workflow orchestrator",
@@ -105,6 +90,8 @@ Commands:
   show     <task-id> <report>        Print a report or the brief whole, by name
   decide   <task-id> <choice> --step N --gate KIND [--to PHASE] [--note TEXT]
                                       Make a choice from the card, for that step only
+  resize   <task-id> [--size S] [--risky yes|no] --reason TEXT
+                                      Change a task's sizing, either way (only the owner lowers one)
   register <path> [--alias <name>]   Register a repo with relay
   proto start <name> --repo <alias> --idea TEXT [--hours N]
                                       Prototype: build a sketch fast on proto/<name>, no chain
@@ -117,7 +104,7 @@ Commands:
                                       Sqlite-backend recovery/reconciliation (see below)
         """,
     )
-    parser.add_argument("command", choices=["start", "next", "status", "list", "gate-check", "profile", "validate", "send-back", "override", "note", "abort", "waiting", "card", "show", "decide", "register", "doctor", "recover", "proto", "promote"])
+    parser.add_argument("command", choices=["start", "next", "status", "list", "gate-check", "profile", "validate", "send-back", "override", "note", "abort", "waiting", "card", "show", "decide", "resize", "register", "doctor", "recover", "proto", "promote"])
     parser.add_argument("task_id", nargs="?", help="Task ID, repo path (register), or repo alias or path (profile)")
     parser.add_argument("phase", nargs="?", help="Phase for override; report name for show; choice for decide")
     parser.add_argument("--step", type=int, help="decide: the step the card was for")
@@ -133,8 +120,11 @@ Commands:
     parser.add_argument("--alias", help="Alias for register command")
     parser.add_argument("--idea", help="proto start: one paragraph: what it is, who it is for, what 'wow' looks like")
     parser.add_argument("--hours", type=float, help="proto start: the timebox in hours (default 4, at most 8)")
-    parser.add_argument("--size", help="promote: how big the real build is: feature or project")
-    parser.add_argument("--risky", help="promote: yes for auth, input handling, money or production data; else no")
+    parser.add_argument("--size", help="promote: how big the real build is: feature or project; "
+                                       "resize: the task's new size: fix, feature or project")
+    parser.add_argument("--risky", help="promote, resize: yes for auth, input handling, money or "
+                                        "production data; else no")
+    parser.add_argument("--reason", help="resize: why the sizing changes (required, one line)")
     parser.add_argument("--as", dest="as_task", metavar="TASK_ID",
                         help="promote: the real task's id (default <name>-build)")
     parser.add_argument("--note", help="override, send-back, note: what the owner decided or wants changed; "
@@ -173,7 +163,6 @@ Commands:
         parser.error(f"--json is only available for: {', '.join(JSON_COMMANDS)}, profile")
     config = settings.load_config()
 
-    # Override auto from config
     if config.get("auto_invoke"):
         args.auto = True
 
@@ -187,13 +176,19 @@ Commands:
         sys.exit(cmd_profile(args.task_id, args.as_json))
 
     proto_only = {"--idea": args.idea, "--hours": args.hours}
-    promote_only = {"--size": args.size, "--risky": args.risky, "--as": args.as_task}
+    promote_only = {"--as": args.as_task}
+    promote_or_resize = {"--size": args.size, "--risky": args.risky}
     for flag, value in proto_only.items():
         if value is not None and args.command != "proto":
             parser.error(f"{flag} is for proto start")
     for flag, value in promote_only.items():
         if value is not None and args.command != "promote":
             parser.error(f"{flag} is for promote")
+    for flag, value in promote_or_resize.items():
+        if value is not None and args.command not in ("promote", "resize"):
+            parser.error(f"{flag} is for promote and resize")
+    if args.reason is not None and args.command != "resize":
+        parser.error("--reason is for resize")
 
     if args.command in ("proto", "promote"):
         sys.exit(run_proto(args, parser))
@@ -201,14 +196,14 @@ Commands:
     if args.command == "register":
         if not args.task_id:
             parser.error("'register' requires a repo path")
-        cmd_register(args.task_id, alias=args.alias)
+        exit_on_failure(cmd_register(args.task_id, alias=args.alias))
         return
 
     if args.command == "recover":
-        cmd_recover(config, task_id=args.task_id, init=args.init,
-                    from_projections=args.from_projections, apply=args.apply,
-                    regenerate_projections=args.regenerate_projections,
-                    decisions_path=args.decisions)
+        exit_on_failure(cmd_recover(config, task_id=args.task_id, init=args.init,
+                                    from_projections=args.from_projections, apply=args.apply,
+                                    regenerate_projections=args.regenerate_projections,
+                                    decisions_path=args.decisions))
         return
 
     if args.command == "waiting" and args.task_id:
@@ -219,6 +214,7 @@ Commands:
     if args.as_json:
         sys.exit(run_json_command(args.command, args.task_id, config))
 
+    exit_code = 0
     try:
         if args.command == "list":
             cmd_list(config)
@@ -228,33 +224,35 @@ Commands:
             return
 
         if args.command == "start":
-            cmd_start(args.task_id, args.auto, config, deploy_intent=args.deploy,
-                      repo=args.repo, base=args.base, worktree=args.worktree)
+            exit_code = cmd_start(args.task_id, args.auto, config, deploy_intent=args.deploy,
+                                  repo=args.repo, base=args.base, worktree=args.worktree)
         elif args.command == "next":
-            cmd_next(args.task_id, args.auto, config)
+            exit_code = cmd_next(args.task_id, args.auto, config)
         elif args.command == "status":
             cmd_status(args.task_id, config)
         elif args.command == "gate-check":
             cmd_gate_check(args.task_id, config)
         elif args.command == "validate":
-            cmd_validate(args.task_id, config)
+            exit_code = cmd_validate(args.task_id, config)
         elif args.command == "send-back":
-            cmd_send_back(args.task_id, config, args.auto, note=args.note)
+            exit_code = cmd_send_back(args.task_id, config, args.auto, note=args.note)
         elif args.command == "override":
             if not args.phase:
                 parser.error("'override' requires a phase argument")
-            cmd_override(args.task_id, args.phase, config, args.auto, note=args.note)
+            exit_code = cmd_override(args.task_id, args.phase, config, args.auto, note=args.note)
         elif args.command == "note":
-            cmd_note(args.task_id, config, args.note)
+            exit_code = cmd_note(args.task_id, config, args.note)
         elif args.command == "abort":
-            cmd_abort(args.task_id, config)
+            exit_code = cmd_abort(args.task_id, config)
         elif args.command == "card":
             cmd_card(args.task_id, config)
         elif args.command == "show":
-            cmd_show(args.task_id, args.phase, config)
+            exit_code = cmd_show(args.task_id, args.phase, config)
+        elif args.command == "resize":
+            exit_code = cmd_resize(args.task_id, config, args.size, args.risky, args.reason)
         elif args.command == "decide":
-            cmd_decide(args.task_id, args.phase, args.step, args.gate_kind, args.to_phase, args.note,
-                       config, args.auto)
+            exit_code = cmd_decide(args.task_id, args.phase, args.step, args.gate_kind, args.to_phase,
+                                   args.note, config, args.auto)
     except TaskNotFound as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -263,6 +261,7 @@ Commands:
         # silent fallback to the files backend or to projection data.
         print(f"Error: {e}")
         sys.exit(1)
+    exit_on_failure(exit_code)
 
 
 if __name__ == "__main__":

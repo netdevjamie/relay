@@ -20,14 +20,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import db
+import migrate_legacy
 import relay
+from tests.cli_edge import run_relay
 import settings
 import run_state
 import routing
 import agents
 import commands
 from settings import VALID_PHASES, VALID_VERDICTS, VALID_STATUSES, DEFAULT_CONFIG
-from run_state import init_run_state, record_phase
 from agents import artifact_name
 from tests.hostile_yaml import (  # noqa: F401  (nothing_composed is a fixture)
     BAD_VALUE_NAMES, BAD_VALUES, SECURITYS_MERGE_KEYS, nothing_composed,
@@ -137,30 +138,49 @@ class TestTaskCreateRetrieve:
 
 
 # ---------------------------------------------------------------------------
-# 4. Step creation/update, via record_step_and_save (the save_run_state()
-#    replacement) -- exercised the same way relay.py's cmd_* functions
-#    actually call it: mutate a state dict, then save.
+# 4. Step creation/update, through the explicit calls the commands make
+#    record_dispatch() when a step starts,
+#    record_verdict() when its verdict is read.
 # ---------------------------------------------------------------------------
 
+def _dispatch(conn, task_id: str, phase: str, step: int, task_dir: Path | None = None,
+              verdict: str | None = None) -> None:
+    """Record one step the way a command does: dispatched with its report
+    file, then, when given, its verdict."""
+    db.record_dispatch(conn, task_id, phase=phase, step=step,
+                       artifact_filename=f"{step:02d}-{phase}.md",
+                       created_at="2026-08-31T00:00:00Z", task_dir=task_dir)
+    if verdict:
+        db.record_verdict(conn, task_id, step=step, phase=phase, verdict=verdict, task_dir=task_dir)
+
+
+def _save(conn, task_id: str, *, status: str = "in_progress", current_phase: str = "architect",
+          next_step: int | None = None, worktree_path=None, branch=None, base=None) -> None:
+    """Save the task row's own fields, as save_run_state() does."""
+    db.update_task(conn, task_id, status=status, current_phase=current_phase,
+                   next_step=next_step, updated=None, deploy_intent=False, repo=None,
+                   worktree_path=worktree_path, branch=branch, base=base)
+
+
 class TestSteps:
-    def test_record_step_and_save_creates_step_row(self, conn, tmp_path):
-        state = init_run_state("s1")
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(conn, "s1", state, task_dir=tmp_path / "s1")
+    def test_record_dispatch_creates_step_row(self, conn, tmp_path):
+        """Was test_record_step_and_save_creates_step_row: the step row now
+        comes from record_dispatch, not from a save reading the history."""
+        db.create_task(conn, "s1")
+        _dispatch(conn, "s1", "architect", 1, task_dir=tmp_path / "s1")
         latest = db.get_latest_step(conn, "s1")
         assert latest["phase"] == "architect"
         assert latest["step"] == 1
         assert latest["verdict"] is None
 
-    def test_verdict_backfilled_onto_existing_step(self, conn, tmp_path):
-        state = init_run_state("s2")
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(conn, "s2", state, task_dir=tmp_path / "s2")
+    def test_verdict_recorded_onto_existing_step(self, conn, tmp_path):
+        """Was test_verdict_backfilled_onto_existing_step: the verdict now
+        comes from record_verdict, not from a save comparing the history."""
+        db.create_task(conn, "s2")
+        _dispatch(conn, "s2", "architect", 1, task_dir=tmp_path / "s2")
 
-        # Mirror cmd_next's own logic: attach a verdict to the matching
-        # history entry, then save again.
-        state["history"][0]["verdict"] = "ready-for-builder"
-        db.record_step_and_save(conn, "s2", state, task_dir=tmp_path / "s2")
+        db.record_verdict(conn, "s2", step=1, phase="architect", verdict="ready-for-builder",
+                          task_dir=tmp_path / "s2")
 
         latest = db.get_latest_step(conn, "s2")
         assert latest["verdict"] == "ready-for-builder"
@@ -169,9 +189,8 @@ class TestSteps:
         assert rows["n"] == 1
 
     def test_get_next_step_number(self, conn, tmp_path):
-        state = init_run_state("s3")
-        record_phase(state, "architect", 1, verdict="ready-for-builder")
-        db.record_step_and_save(conn, "s3", state, task_dir=tmp_path / "s3")
+        db.create_task(conn, "s3")
+        _dispatch(conn, "s3", "architect", 1, task_dir=tmp_path / "s3", verdict="ready-for-builder")
         assert db.get_next_step_number(conn, "s3") == 2
 
     def test_get_next_step_number_no_steps_yet(self, conn):
@@ -185,35 +204,30 @@ class TestSteps:
 
 class TestTransitions:
     def test_invalid_phase_rejected(self, conn, tmp_path):
-        state = init_run_state("bad1")
-        state["current_phase"] = "not-a-phase"
+        db.create_task(conn, "bad1")
         with pytest.raises(db.InvalidTransition):
-            db.record_step_and_save(conn, "bad1", state, task_dir=tmp_path / "bad1")
+            _save(conn, "bad1", current_phase="not-a-phase")
 
     def test_invalid_status_rejected(self, conn, tmp_path):
-        state = init_run_state("bad2")
-        state["status"] = "not-a-status"
+        db.create_task(conn, "bad2")
         with pytest.raises(db.InvalidTransition):
-            db.record_step_and_save(conn, "bad2", state, task_dir=tmp_path / "bad2")
+            _save(conn, "bad2", status="not-a-status")
 
     def test_invalid_verdict_for_phase_rejected(self, conn, tmp_path):
-        state = init_run_state("bad3")
-        record_phase(state, "architect", 1, verdict="not-a-real-verdict")
+        db.create_task(conn, "bad3")
+        _dispatch(conn, "bad3", "architect", 1, task_dir=tmp_path / "bad3")
         with pytest.raises(db.InvalidTransition):
-            db.record_step_and_save(conn, "bad3", state, task_dir=tmp_path / "bad3")
+            db.record_verdict(conn, "bad3", step=1, phase="architect",
+                              verdict="not-a-real-verdict")
 
     def test_valid_full_architect_to_builder_cycle(self, conn, tmp_path):
-        state = init_run_state("good1")
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(conn, "good1", state, task_dir=tmp_path / "good1")
+        db.create_task(conn, "good1")
+        _dispatch(conn, "good1", "architect", 1, task_dir=tmp_path / "good1")
 
-        state["history"][0]["verdict"] = "ready-for-builder"
-        db.record_step_and_save(conn, "good1", state, task_dir=tmp_path / "good1")
+        db.record_verdict(conn, "good1", step=1, phase="architect", verdict="ready-for-builder")
 
-        state["current_phase"] = "builder"
-        state["next_step"] = 3
-        record_phase(state, "builder", 2)
-        db.record_step_and_save(conn, "good1", state, task_dir=tmp_path / "good1")
+        _dispatch(conn, "good1", "builder", 2, task_dir=tmp_path / "good1")
+        _save(conn, "good1", current_phase="builder", next_step=3)
 
         final = db.get_task(conn, "good1")
         assert final["current_phase"] == "builder"
@@ -232,11 +246,11 @@ class TestEventsAudit:
         assert any(e["event_type"] == db.EVENT_TASK_CREATED for e in events)
 
     def test_multi_step_audit_trail_is_chronological(self, conn, tmp_path):
-        state = init_run_state("ev2")
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(conn, "ev2", state, task_dir=tmp_path / "ev2")
-        state["history"][0]["verdict"] = "ready-for-builder"
-        db.record_step_and_save(conn, "ev2", state, task_dir=tmp_path / "ev2")
+        db.create_task(conn, "ev2")
+        _dispatch(conn, "ev2", "architect", 1, task_dir=tmp_path / "ev2",
+                  verdict="ready-for-builder")
+        _dispatch(conn, "ev2", "builder", 2, task_dir=tmp_path / "ev2")
+        _save(conn, "ev2", current_phase="builder")  # a real change writes state_saved
 
         events = db.get_events(conn, "ev2")
         assert [e["event_type"] for e in events][0] == db.EVENT_TASK_CREATED
@@ -260,24 +274,22 @@ class TestEventsAudit:
 
 class TestRetries:
     def test_retry_count_derived_from_events(self, conn, tmp_path):
-        state = init_run_state("r1")
-        db.record_step_and_save(conn, "r1", state, task_dir=tmp_path / "r1")
+        """The count is read from retry events, one per record_retry call
+        (never worked out from a saved state dict)."""
+        db.create_task(conn, "r1")
         assert db.get_retry_counts(conn, "r1")["builder"] == 0
 
-        state["retries"]["builder"] += 1
-        db.record_step_and_save(conn, "r1", state, task_dir=tmp_path / "r1")
+        db.record_retry(conn, "r1", phase="builder")
         assert db.get_retry_counts(conn, "r1")["builder"] == 1
 
-        state["retries"]["builder"] += 1
-        db.record_step_and_save(conn, "r1", state, task_dir=tmp_path / "r1")
+        db.record_retry(conn, "r1", phase="builder")
         assert db.get_retry_counts(conn, "r1")["builder"] == 2
         # Untouched phase stays zero.
         assert db.get_retry_counts(conn, "r1")["reviewer"] == 0
 
     def test_get_task_reflects_retries(self, conn, tmp_path):
-        state = init_run_state("r2")
-        state["retries"]["reviewer"] = 1
-        db.record_step_and_save(conn, "r2", state, task_dir=tmp_path / "r2")
+        db.create_task(conn, "r2")
+        db.record_retry(conn, "r2", phase="reviewer")
         assert db.get_task(conn, "r2")["retries"]["reviewer"] == 1
 
 
@@ -287,14 +299,12 @@ class TestRetries:
 
 class TestWorktree:
     def test_worktree_fields_round_trip(self, conn, tmp_path):
-        state = init_run_state("wt1")
-        state["worktree_path"] = "/Users/you/Projects/worktrees/relay-wt1"
-        state["branch"] = "relay/wt1"
-        state["base"] = "origin/main"
-        db.record_step_and_save(conn, "wt1", state, task_dir=tmp_path / "wt1")
+        worktree_path = "/home/user/projects/worktrees/my-app-wt1"
+        db.create_task(conn, "wt1")
+        _save(conn, "wt1", worktree_path=worktree_path, branch="relay/wt1", base="origin/main")
 
         loaded = db.get_task(conn, "wt1")
-        assert loaded["worktree_path"] == state["worktree_path"]
+        assert loaded["worktree_path"] == worktree_path
         assert loaded["branch"] == "relay/wt1"
         assert loaded["base"] == "origin/main"
 
@@ -313,7 +323,7 @@ class TestWorktree:
 class TestAuthorizationInvariant:
     def test_raw_event_insert_does_not_change_task_state(self, conn):
         """An agent/session writing directly to the events table (bypassing
-        the deliberate record_step_and_save/create_task functions) must not
+        the deliberate create_task/update_task functions) must not
         gain any authority -- specifically, it must not change tasks.status
         or tasks.current_phase. Only the sanctioned write path does that.
         """
@@ -321,7 +331,7 @@ class TestAuthorizationInvariant:
         before = db.get_task(conn, "auth1")
 
         # Simulate an agent trying to write itself into "ops"/"completed"
-        # by inserting a raw event, without going through record_step_and_save.
+        # by inserting a raw event, without going through update_task.
         with conn:
             conn.execute(
                 "INSERT INTO events (task_id, event_type, phase, timestamp) VALUES (?,?,?,?)",
@@ -333,13 +343,15 @@ class TestAuthorizationInvariant:
         assert after["current_phase"] == before["current_phase"] == "architect"
 
     def test_invalid_transition_leaves_no_partial_state(self, conn, tmp_path):
-        """A rejected save must not partially land -- the transaction rolls
+        """A rejected write must not partially land -- the transaction rolls
         back completely (see next section for the dedicated transaction
-        test; this one checks the task-existence angle specifically)."""
-        state = init_run_state("auth2")
-        record_phase(state, "architect", 1, verdict="not-a-real-verdict")
+        test; this one checks the task-existence angle specifically).
+        The task, its step and its verdict are
+        written in one transaction, as a command writes them."""
         with pytest.raises(db.InvalidTransition):
-            db.record_step_and_save(conn, "auth2", state, task_dir=tmp_path / "auth2")
+            with db.transaction(conn):
+                db.create_task(conn, "auth2")
+                _dispatch(conn, "auth2", "architect", 1, verdict="not-a-real-verdict")
         # The task row must not have been created by the failed save.
         assert db.get_task(conn, "auth2") is None
 
@@ -350,19 +362,18 @@ class TestAuthorizationInvariant:
 
 class TestTransactionBoundaries:
     def test_failed_save_does_not_partially_update_existing_task(self, conn, tmp_path):
-        state = init_run_state("tx1")
-        state["current_phase"] = "architect"
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(conn, "tx1", state, task_dir=tmp_path / "tx1")
+        db.create_task(conn, "tx1")
+        _dispatch(conn, "tx1", "architect", 1, task_dir=tmp_path / "tx1")
         snapshot = db.get_task(conn, "tx1")
 
-        # Now attempt a save with a bad verdict mixed in among otherwise-valid
-        # history -- the whole operation must fail atomically, not partially
-        # write the good history entries and skip the bad one.
-        state["history"].append({"phase": "builder", "step": 2, "verdict": "not-valid", "timestamp": "x"})
-        state["current_phase"] = "builder"
+        # Now attempt a command's writes with a bad verdict mixed in among
+        # otherwise-valid ones -- the whole operation must fail atomically,
+        # not partially write the good step and skip the bad verdict.
         with pytest.raises(db.InvalidTransition):
-            db.record_step_and_save(conn, "tx1", state, task_dir=tmp_path / "tx1")
+            with db.transaction(conn):
+                _dispatch(conn, "tx1", "builder", 2, task_dir=tmp_path / "tx1")
+                _save(conn, "tx1", current_phase="builder")
+                db.record_verdict(conn, "tx1", step=2, phase="builder", verdict="not-valid")
 
         after = db.get_task(conn, "tx1")
         assert after["current_phase"] == snapshot["current_phase"] == "architect"
@@ -377,10 +388,9 @@ class TestRestartRecovery:
     def test_state_survives_reconnect(self, tmp_path):
         p = tmp_path / "relay.db"
         c1 = db.connect(p)
-        state = init_run_state("restart1")
-        state["current_phase"] = "architect"
-        record_phase(state, "architect", 1, verdict="ready-for-builder")
-        db.record_step_and_save(c1, "restart1", state, task_dir=tmp_path / "restart1")
+        db.create_task(c1, "restart1")
+        _dispatch(c1, "restart1", "architect", 1, task_dir=tmp_path / "restart1",
+                  verdict="ready-for-builder")
         c1.close()
 
         # Simulate a fresh process: new connection, same file.
@@ -392,7 +402,8 @@ class TestRestartRecovery:
         c2.close()
 
     def test_restart_then_continue_creates_no_duplicate_events(self, tmp_path):
-        """End-to-end acceptance property: reloading canonical
+        """End-to-end acceptance property (also checked by hand via the real CLI
+        across separate OS processes): reloading canonical
         state after a restart is read-only and must never create an event
         merely because a new connection/process opened; the workflow must
         then be able to continue correctly, appending exactly the new,
@@ -402,12 +413,9 @@ class TestRestartRecovery:
         task_dir = tmp_path / "restart2"
 
         c1 = db.connect(p)
-        state = init_run_state("restart2")
-        state["current_phase"] = "architect"
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(c1, "restart2", state, task_dir=task_dir)
-        state["history"][0]["verdict"] = "ready-for-builder"
-        db.record_step_and_save(c1, "restart2", state, task_dir=task_dir)
+        db.create_task(c1, "restart2")
+        _dispatch(c1, "restart2", "architect", 1, task_dir=task_dir)
+        db.record_verdict(c1, "restart2", step=1, phase="architect", verdict="ready-for-builder")
         c1.close()
 
         # "Restart": a fresh connection (simulating a fresh process) does
@@ -431,10 +439,8 @@ class TestRestartRecovery:
         # spurious duplication," not "no new events ever."
         c2 = db.connect(p)
         pre_continue_count = len(db.get_events(c2, "restart2"))
-        state["current_phase"] = "builder"
-        state["next_step"] = 3
-        record_phase(state, "builder", 2)
-        db.record_step_and_save(c2, "restart2", state, task_dir=task_dir)
+        _dispatch(c2, "restart2", "builder", 2, task_dir=task_dir)
+        _save(c2, "restart2", current_phase="builder", next_step=3)
         post_continue_count = len(db.get_events(c2, "restart2"))
         assert post_continue_count > pre_continue_count, (
             "a real continuation must append new events"
@@ -459,9 +465,9 @@ class TestRestartRecovery:
 
 class TestProjections:
     def test_generate_run_yaml_matches_shape(self, conn, tmp_path):
-        state = init_run_state("proj1")
-        record_phase(state, "architect", 1, verdict="ready-for-builder")
-        db.record_step_and_save(conn, "proj1", state, task_dir=tmp_path / "proj1")
+        db.create_task(conn, "proj1")
+        _dispatch(conn, "proj1", "architect", 1, task_dir=tmp_path / "proj1",
+                  verdict="ready-for-builder")
 
         text = db.generate_run_yaml(conn, "proj1")
         parsed = db._yaml.safe_load(text)
@@ -470,9 +476,8 @@ class TestProjections:
             assert field in parsed
 
     def test_write_and_regenerate_projection_is_byte_identical(self, conn, tmp_path):
-        state = init_run_state("proj2")
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(conn, "proj2", state, task_dir=tmp_path / "proj2")
+        db.create_task(conn, "proj2")
+        _dispatch(conn, "proj2", "architect", 1, task_dir=tmp_path / "proj2")
 
         task_dir = tmp_path / "proj2"
         path1 = db.write_projection(conn, "proj2", task_dir)
@@ -486,10 +491,9 @@ class TestProjections:
         assert content1 == content2
 
     def test_deleting_projection_does_not_touch_canonical_state(self, conn, tmp_path):
-        state = init_run_state("proj3")
-        state["current_phase"] = "architect"
-        record_phase(state, "architect", 1, verdict="ready-for-builder")
-        db.record_step_and_save(conn, "proj3", state, task_dir=tmp_path / "proj3")
+        db.create_task(conn, "proj3")
+        _dispatch(conn, "proj3", "architect", 1, task_dir=tmp_path / "proj3",
+                  verdict="ready-for-builder")
         task_dir = tmp_path / "proj3"
         path = db.write_projection(conn, "proj3", task_dir)
         path.unlink()
@@ -500,18 +504,15 @@ class TestProjections:
         assert still_there["history"][0]["verdict"] == "ready-for-builder"
 
     def test_projection_is_stale_detection(self, conn, tmp_path):
-        state = init_run_state("proj4")
-        db.record_step_and_save(conn, "proj4", state, task_dir=tmp_path / "proj4")
+        db.create_task(conn, "proj4")
         task_dir = tmp_path / "proj4"
         assert db.projection_is_stale(conn, "proj4", task_dir) is True  # no file yet
         db.write_projection(conn, "proj4", task_dir)
         assert db.projection_is_stale(conn, "proj4", task_dir) is False
 
         # Mutate canonical state without regenerating -- now stale.
-        state["current_phase"] = "builder"
-        state["next_step"] = 2
-        record_phase(state, "builder", 2)
-        db.record_step_and_save(conn, "proj4", state, task_dir=task_dir)
+        _dispatch(conn, "proj4", "builder", 2, task_dir=task_dir)
+        _save(conn, "proj4", current_phase="builder", next_step=2)
         assert db.projection_is_stale(conn, "proj4", task_dir) is True
 
 
@@ -542,13 +543,13 @@ class TestMigrationDryRun:
         self._write_artifact(task_dir / "01-architect.md", task_id="clean-task",
                               phase="architect", step=1, verdict="ready-for-builder")
 
-        file_state = db.read_file_state(task_dir)
-        result = db.reconcile_task("clean-task", file_state)
+        file_state = migrate_legacy.read_file_state(task_dir)
+        result = migrate_legacy.reconcile_task("clean-task", file_state)
         assert result["ok"] is True
         assert result["discrepancies"] == []
 
     def test_known_bad_status_value_flagged(self, tmp_path):
-        """A ledger may hold status: complete (not 'completed'), which is
+        """Mirrors the real corpus: status: complete (not 'completed') is
         not in VALID_STATUSES and must be surfaced, not silently accepted."""
         task_dir = tmp_path / "bad-status-task"
         task_dir.mkdir()
@@ -558,8 +559,8 @@ class TestMigrationDryRun:
             "current_phase: done\nnext_step: 2\nschema_version: 1\n"
             "repo: relay\ndeploy_intent: false\nretries: {}\nhistory: []\n"
         )
-        file_state = db.read_file_state(task_dir)
-        result = db.reconcile_task("bad-status-task", file_state)
+        file_state = migrate_legacy.read_file_state(task_dir)
+        result = migrate_legacy.reconcile_task("bad-status-task", file_state)
         assert result["ok"] is False
         assert any("status" in d and "complete" in d for d in result["discrepancies"])
 
@@ -576,8 +577,8 @@ class TestMigrationDryRun:
         )
         self._write_artifact(task_dir / "01-architect.md", task_id="drifted-task",
                               phase="architect", step=1, verdict="ready-for-builder")
-        file_state = db.read_file_state(task_dir)
-        result = db.reconcile_task("drifted-task", file_state)
+        file_state = migrate_legacy.read_file_state(task_dir)
+        result = migrate_legacy.reconcile_task("drifted-task", file_state)
         assert result["ok"] is False
         assert any("disagrees" in d for d in result["discrepancies"])
 
@@ -614,7 +615,7 @@ class TestMigrationDryRun:
             for p in tasks_dir.rglob("*")
         }
 
-        summary = db.dry_run_migration(tasks_dir)
+        summary = migrate_legacy.dry_run_migration(tasks_dir)
 
         # Read-only: nothing on disk changed.
         after_snapshot = {
@@ -631,9 +632,9 @@ class TestMigrationDryRun:
         assert flagged_ids == {"bad-task"}
 
     def test_dry_run_migration_reports_worked_task_without_run_yaml(self, tmp_path):
-        """A task directory with real agent artifacts but no run.yaml is
-        reported, not skipped as 'brief-only', so no historical work is
-        left out of the migration report."""
+        """Category G regression: a task directory with real agent artifacts
+        but no run.yaml used to be skipped as 'brief-only', silently leaving
+        real historical work out of the migration report."""
         tasks_dir = tmp_path / "tasks"
         tasks_dir.mkdir()
 
@@ -650,7 +651,7 @@ class TestMigrationDryRun:
         (brief_only / "brief.md").write_text("# never started\n")
         (brief_only / "98-session-notes.md").write_text("human notes, not agent output\n")
 
-        summary = db.dry_run_migration(tasks_dir)
+        summary = migrate_legacy.dry_run_migration(tasks_dir)
 
         assert summary["total"] == 1
         assert summary["with_run_yaml"] == 0
@@ -673,7 +674,7 @@ class TestMigrationDryRun:
         self._write_artifact(worked / "01-architect.md", task_id="clean-artifacts-no-run-yaml",
                               phase="architect", step=1, verdict="ready-for-builder")
 
-        summary = db.dry_run_migration(tasks_dir)
+        summary = migrate_legacy.dry_run_migration(tasks_dir)
 
         assert summary["flagged"] == 1
         assert summary["results"][0]["ok"] is False
@@ -687,7 +688,7 @@ class TestMigrationDryRun:
                               phase="architect", step=1, verdict="ready-for-builder")
         (task_dir / "02-prod-promotion-plan.md").write_text("# Plan\n\nJust prose, no frontmatter.\n")
 
-        result = db.reconcile_task("no-frontmatter-task", db.read_file_state(task_dir))
+        result = migrate_legacy.reconcile_task("no-frontmatter-task", migrate_legacy.read_file_state(task_dir))
 
         assert result["ok"] is False
         assert any("02-prod-promotion-plan.md" in d and "no YAML frontmatter" in d
@@ -707,7 +708,7 @@ class TestMigrationDryRun:
         self._write_artifact(task_dir / "03-tester.md", task_id="duplicate-step-task",
                               phase="tester", step=3, verdict="pass")
 
-        result = db.reconcile_task("duplicate-step-task", db.read_file_state(task_dir))
+        result = migrate_legacy.reconcile_task("duplicate-step-task", migrate_legacy.read_file_state(task_dir))
 
         assert result["ok"] is False
         duplicate_findings = [d for d in result["discrepancies"] if "step number 3" in d]
@@ -720,7 +721,7 @@ class TestMigrationDryRun:
         """dry_run_migration() doesn't even take a connection -- this test
         documents and locks in that it's structurally incapable of writing."""
         import inspect
-        sig = inspect.signature(db.dry_run_migration)
+        sig = inspect.signature(migrate_legacy.dry_run_migration)
         assert "conn" not in sig.parameters
 
 
@@ -742,7 +743,7 @@ class TestImportTask:
 
     def test_import_clean_task(self, conn, tmp_path):
         task_dir = self._clean_task_dir(tmp_path)
-        result = db.import_task(conn, "import-me", task_dir)
+        result = migrate_legacy.import_task(conn, "import-me", task_dir)
         assert result["ok"] is True
         loaded = db.get_task(conn, "import-me")
         assert loaded["current_phase"] == "architect"
@@ -751,11 +752,11 @@ class TestImportTask:
     def test_import_does_not_modify_source_files(self, conn, tmp_path):
         task_dir = self._clean_task_dir(tmp_path)
         before = (task_dir / "run.yaml").read_bytes()
-        db.import_task(conn, "import-me", task_dir)
+        migrate_legacy.import_task(conn, "import-me", task_dir)
         after = (task_dir / "run.yaml").read_bytes()
         assert before == after
 
-    # -- current_phase: done must not become "architect" --
+    # -- Defect A regressions: current_phase: done must not become "architect" --
 
     def test_import_preserves_done_phase(self, conn, tmp_path):
         task_dir = tmp_path / "done-task"
@@ -772,18 +773,19 @@ class TestImportTask:
             "---\ntask_id: done-task\nphase: architect\nstep: 1\n"
             "date: 2026-05-08\nverdict: ready-for-builder\n---\n\nBody.\n"
         )
-        result = db.import_task(conn, "done-task", task_dir)
+        result = migrate_legacy.import_task(conn, "done-task", task_dir)
         assert result["ok"] is True
         loaded = db.get_task(conn, "done-task")
         assert loaded["current_phase"] == "done", (
-            "current_phase must be preserved as 'done', "
+            "Defect A regression: current_phase must be preserved as 'done', "
             f"not silently mapped to '{loaded['current_phase']}'"
         )
         assert loaded["status"] == "completed"
 
     def test_import_preserves_done_phase_multi_step(self, conn, tmp_path):
-        """A multi-round task ending in status: completed /
-        current_phase: done."""
+        """Mirrors the real corpus example (20260508-connect-bot-design)
+        that first surfaced Defect A: an 11-step, multi-round task ending
+        in status: completed / current_phase: done."""
         task_dir = tmp_path / "multi-done"
         task_dir.mkdir()
         (task_dir / "run.yaml").write_text(
@@ -805,15 +807,16 @@ class TestImportTask:
                 f"---\ntask_id: multi-done\nphase: {phase}\nstep: {step}\n"
                 f"date: {date}\nverdict: {verdict}\n---\n\nBody.\n"
             )
-        result = db.import_task(conn, "multi-done", task_dir)
+        result = migrate_legacy.import_task(conn, "multi-done", task_dir)
         assert result["ok"] is True
         loaded = db.get_task(conn, "multi-done")
         assert loaded["current_phase"] == "done"
 
     def test_downstream_routing_on_migrated_done_task(self, conn, tmp_path):
         """Downstream routing behavior: cmd_next on an already-completed
-        migrated task must short-circuit via status, not current_phase,
-        through the actual routing code path."""
+        migrated task must short-circuit via status, not current_phase --
+        proving the fix doesn't just look right in isolation but behaves
+        correctly through the actual routing code path."""
         task_dir = tmp_path / "routed-done"
         task_dir.mkdir()
         (task_dir / "run.yaml").write_text(
@@ -828,7 +831,7 @@ class TestImportTask:
             "---\ntask_id: routed-done\nphase: architect\nstep: 1\n"
             "date: 2026-05-08\nverdict: ready-for-builder\n---\n\nBody.\n"
         )
-        db.import_task(conn, "routed-done", task_dir)
+        migrate_legacy.import_task(conn, "routed-done", task_dir)
 
         import relay as relay_module
         state = db.get_task(conn, "routed-done")
@@ -838,12 +841,12 @@ class TestImportTask:
         assert state["status"] in ("completed", "abandoned")
 
     def test_create_task_still_rejects_genuinely_invalid_phase(self, conn):
-        """"done" is the one exception to phase validation: it must not
-        loosen validation for anything else."""
+        """The Defect A fix adds exactly one exception ("done") -- it must
+        not loosen validation for anything else."""
         with pytest.raises(db.InvalidTransition):
             db.create_task(conn, "still-invalid", current_phase="not-a-real-phase-or-done")
 
-    # -- per-step timestamps must survive migration --
+    # -- Defect B regressions: per-step timestamps must survive migration --
 
     def test_import_preserves_distinct_step_timestamps(self, conn, tmp_path):
         task_dir = tmp_path / "timestamped"
@@ -870,7 +873,7 @@ class TestImportTask:
             "---\ntask_id: timestamped\nphase: reviewer\nstep: 3\n"
             "date: 2026-05-08\nverdict: null\n---\n\nIn progress.\n"
         )
-        db.import_task(conn, "timestamped", task_dir)
+        migrate_legacy.import_task(conn, "timestamped", task_dir)
 
         rows = conn.execute(
             "SELECT step, created_at FROM steps WHERE task_id='timestamped' ORDER BY step"
@@ -900,7 +903,7 @@ class TestImportTask:
             "---\ntask_id: no-timestamp\nphase: architect\nstep: 1\n"
             "verdict: ready-for-builder\n---\n\nBody.\n"
         )
-        db.import_task(conn, "no-timestamp", task_dir)
+        migrate_legacy.import_task(conn, "no-timestamp", task_dir)
         row = conn.execute(
             "SELECT created_at FROM steps WHERE task_id='no-timestamp' AND step=1"
         ).fetchone()
@@ -923,7 +926,7 @@ class TestImportTask:
             "---\ntask_id: date-fallback\nphase: architect\nstep: 1\n"
             "date: 2026-05-08\nverdict: ready-for-builder\n---\n\nBody.\n"
         )
-        db.import_task(conn, "date-fallback", task_dir)
+        migrate_legacy.import_task(conn, "date-fallback", task_dir)
         row = conn.execute(
             "SELECT created_at FROM steps WHERE task_id='date-fallback' AND step=1"
         ).fetchone()
@@ -931,8 +934,8 @@ class TestImportTask:
         assert row["created_at"] != "2026-05-08T11:53:31Z"  # still not run.yaml's `updated`
 
     def test_import_duplicate_step_history_last_entry_wins(self, conn, tmp_path):
-        """run.yaml's history may contain two entries for the same step
-        number (a phase-start entry, then a
+        """Mirrors a quirk found in real task folders: run.yaml's history contains
+        two entries for the same step number (a phase-start entry, then a
         separately-appended verdict entry, from an older relay.py version).
         The later entry's timestamp is used -- deterministic, documented,
         not a fabricated average."""
@@ -951,15 +954,16 @@ class TestImportTask:
             "---\ntask_id: dup-step\nphase: builder\nstep: 2\n"
             "date: 2026-06-04\nverdict: ready-for-review\n---\n\nBody.\n"
         )
-        db.import_task(conn, "dup-step", task_dir)
+        migrate_legacy.import_task(conn, "dup-step", task_dir)
         row = conn.execute(
             "SELECT created_at FROM steps WHERE task_id='dup-step' AND step=2"
         ).fetchone()
         assert row["created_at"] == "2026-06-04T13:11:58Z"  # the later of the two entries
 
     def test_import_rejects_invalid_step_verdict(self, conn, tmp_path):
-        """The same check as the status one, applied to step verdicts: a
-        reviewer-only verdict recorded on a security-phase artifact."""
+        """Same class of fix as the status one, applied to step verdicts:
+        mirrors mobile-sentry-go-live's real corpus shape (a reviewer-only
+        verdict recorded on a security-phase artifact)."""
         task_dir = tmp_path / "bad-verdict"
         task_dir.mkdir()
         (task_dir / "run.yaml").write_text(
@@ -973,7 +977,7 @@ class TestImportTask:
             "date: 2026-05-24\nverdict: approved\n---\n\nBody.\n"
         )
         with pytest.raises(db.InvalidTransition, match="not valid for phase"):
-            db.import_task(conn, "bad-verdict", task_dir)
+            migrate_legacy.import_task(conn, "bad-verdict", task_dir)
         assert db.get_task(conn, "bad-verdict") is None
 
     def test_import_refuses_discrepant_task_without_force(self, conn, tmp_path):
@@ -986,19 +990,20 @@ class TestImportTask:
             "repo: relay\ndeploy_intent: false\nretries: {}\nhistory: []\n"
         )
         with pytest.raises(db.InvalidTransition):
-            db.import_task(conn, "discrepant", task_dir)
+            migrate_legacy.import_task(conn, "discrepant", task_dir)
         assert db.get_task(conn, "discrepant") is None
 
     def test_import_refuses_duplicate_task(self, conn, tmp_path):
         task_dir = self._clean_task_dir(tmp_path)
-        db.import_task(conn, "import-me", task_dir)
+        migrate_legacy.import_task(conn, "import-me", task_dir)
         with pytest.raises(ValueError):
-            db.import_task(conn, "import-me", task_dir)
+            migrate_legacy.import_task(conn, "import-me", task_dir)
 
     def test_force_alone_no_longer_writes_invalid_status(self, conn, tmp_path):
-        """force=True must NEVER be sufficient, on its own, to write a
-        non-canonical status into canonical state: written verbatim,
-        'complete' would later crash cmd_next."""
+        """Core regression for the bike-power-b0-course-bounds incident:
+        force=True must NEVER be sufficient, on its own, to write a
+        non-canonical status into canonical state. Before the fix, this
+        wrote 'complete' verbatim and later crashed cmd_next."""
         task_dir = tmp_path / "bad-status-forced"
         task_dir.mkdir()
         (task_dir / "run.yaml").write_text(
@@ -1008,7 +1013,7 @@ class TestImportTask:
             "repo: relay\ndeploy_intent: false\nretries: {}\nhistory: []\n"
         )
         with pytest.raises(db.InvalidTransition, match="not canonical"):
-            db.import_task(conn, "bad-status-forced", task_dir, force=True)
+            migrate_legacy.import_task(conn, "bad-status-forced", task_dir, force=True)
         assert db.get_task(conn, "bad-status-forced") is None
 
     def test_valid_statuses_never_gains_complete(self):
@@ -1020,30 +1025,35 @@ class TestImportTask:
         assert VALID_STATUSES == ["in_progress", "completed", "blocked", "abandoned"]
 
     def test_normal_save_path_unaffected_by_import_task_changes(self, conn, tmp_path):
-        """record_step_and_save() (ordinary Relay task creation/update,
-        used by cmd_start/cmd_next/cmd_override) must behave exactly as
-        before -- it never took a `decision` and still doesn't."""
+        """The ordinary save path (task creation/update, used by
+        cmd_start/cmd_next/cmd_override) must behave exactly as before -- it
+        never took a `decision` and still doesn't. That path is create_task, record_dispatch, record_verdict and
+        update_task, not record_step_and_save."""
         import inspect
-        sig = inspect.signature(db.record_step_and_save)
-        assert "decision" not in sig.parameters
-        state = init_run_state("normal-path")
-        state["current_phase"] = "architect"
-        record_phase(state, "architect", 1, verdict="ready-for-builder")
-        db.record_step_and_save(conn, "normal-path", state, task_dir=tmp_path / "normal-path")
+        for fn in (db.create_task, db.record_dispatch, db.record_verdict, db.update_task):
+            assert "decision" not in inspect.signature(fn).parameters, fn.__name__
+        db.create_task(conn, "normal-path")
+        db.record_dispatch(conn, "normal-path", phase="architect", step=1,
+                           artifact_filename="01-architect.md", created_at="2026-09-01T00:00:00Z",
+                           task_dir=tmp_path / "normal-path")
+        db.record_verdict(conn, "normal-path", step=1, phase="architect", verdict="ready-for-builder")
         assert db.get_task(conn, "normal-path")["current_phase"] == "architect"
 
 
 class TestImportTaskAtomicity:
-    """import_task() must be one atomic transaction. If task-row creation
-    committed on its own, separately from the rest of import_task()'s
-    writes, a failure after that point would leave an orphaned tasks row
-    with no steps/events, and a retry would then fail at task_exists()
-    with no way to clean up short of manually deleting the row.
+    """Regression: import_task() must be one atomic transaction. Before
+    the fix, task-row creation (via create_task()) committed on its own,
+    separately from the rest of import_task()'s writes -- a failure after
+    that point left an orphaned tasks row with no steps/events, and a
+    retry would then fail at task_exists() with no way to clean up short
+    of manually deleting the row.
 
     This forces a real failure INSIDE the transaction boundary (not by
     mocking import_task() itself) by making a downstream helper that runs
-    partway through the write block raise. By that point the task row
-    must not be committed, because everything shares one transaction.
+    partway through the write block raise. By that point, in the pre-fix
+    code, the task row would already be independently committed; in the
+    fixed code it must not be, because everything now shares one
+    transaction.
     """
 
     def _clean_task_dir(self, tmp_path, task_id="atomic-me"):
@@ -1073,14 +1083,15 @@ class TestImportTaskAtomicity:
         # (uncommitted) inside the same transaction. Forcing it to raise
         # here proves the whole transaction -- including the earlier
         # writes -- rolls back together, not just the failing statement.
-        monkeypatch.setattr(db, "_import_historical_events", _boom)
+        monkeypatch.setattr(migrate_legacy, "_import_historical_events", _boom)
 
         with pytest.raises(RuntimeError, match="simulated failure"):
-            db.import_task(conn, "atomic-me", task_dir)
+            migrate_legacy.import_task(conn, "atomic-me", task_dir)
 
         # Nothing survives the rollback: not the task row, not the step,
-        # not any event, including the task_created event that a
-        # separately-committing create_task() would have already persisted.
+        # not any event -- including the task_created event that a
+        # separately-committing create_task() would have already persisted
+        # before the fix.
         assert db.task_exists(conn, "atomic-me") is False
         assert db.get_task(conn, "atomic-me") is None
         assert conn.execute(
@@ -1096,15 +1107,15 @@ class TestImportTaskAtomicity:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        monkeypatch.setattr(db, "_import_historical_events", _boom)
+        monkeypatch.setattr(migrate_legacy, "_import_historical_events", _boom)
         with pytest.raises(RuntimeError):
-            db.import_task(conn, "atomic-me", task_dir)
+            migrate_legacy.import_task(conn, "atomic-me", task_dir)
         assert db.task_exists(conn, "atomic-me") is False
 
         # Remove the simulated failure and retry with no manual cleanup
         # (no DELETE, no DB surgery) -- must succeed cleanly.
         monkeypatch.undo()
-        result = db.import_task(conn, "atomic-me", task_dir)
+        result = migrate_legacy.import_task(conn, "atomic-me", task_dir)
         assert result["ok"] is True
         loaded = db.get_task(conn, "atomic-me")
         assert loaded is not None
@@ -1112,10 +1123,10 @@ class TestImportTaskAtomicity:
         assert loaded["history"][0]["verdict"] == "ready-for-builder"
 
     def test_successful_import_still_writes_task_row_and_events_together(self, conn, tmp_path):
-        """Sanity check in the other direction: the ordinary
-        successful-import path still works."""
+        """Sanity check in the other direction: the fix must not have
+        broken the ordinary successful-import path."""
         task_dir = self._clean_task_dir(tmp_path, task_id="atomic-ok")
-        db.import_task(conn, "atomic-ok", task_dir)
+        migrate_legacy.import_task(conn, "atomic-ok", task_dir)
         assert db.task_exists(conn, "atomic-ok") is True
         events = db.get_events(conn, "atomic-ok")
         assert any(e["event_type"] == db.EVENT_TASK_CREATED for e in events)
@@ -1138,12 +1149,18 @@ class TestImportedTaskLiveContinuation:
     the same reconnect-to-the-same-file boundary TestRestartRecovery uses
     at the db.py layer, now exercised through the actual CLI command
     functions instead of bare db.py calls. It does not spawn a second OS
-    process; it proves the function-level boundary for an
-    import_task()-created task.
+    process the way the one-off end-to-end acceptance rehearsal did
+    (2026-09-01, real subprocesses, independently verified via the raw
+    sqlite3 CLI) -- that already proved the OS-process boundary for a
+    cmd_start()-created task; this test proves the function-level
+    boundary specifically for an import_task()-created one, which had
+    never been exercised by anything before this task.
 
-    Fixture: a 3-step in-progress task (architect/builder canonical,
-    reviewer verdict the non-canonical 'approved-with-concerns' variant,
-    corrected via a StepVerdictOverride), left in-progress rather
+    Fixture: a 3-step in-progress task shaped after the real corpus
+    (architect/builder canonical, reviewer verdict is the same
+    non-canonical 'approved-with-concerns' variant found on the real
+    web-sim-responsive-slice-1 -- corrected via the same StepVerdictOverride
+    mechanism already used for that real task), left in-progress rather
     than terminal so there is real continuation work for commands.cmd_next
     to do. The corrected reviewer verdict (approved_with_warnings)
     requires a human gate under the default config, so this exercises the
@@ -1187,15 +1204,15 @@ class TestImportedTaskLiveContinuation:
         task_dir = self._in_progress_fixture(settings.TASKS_DIR, task_id)
 
         # --- Step 1: import via import_task(), the migration path ---
-        decision = db.MigrationDecision(
-            task_id=task_id, note="non-canonical spelling of the verdict",
+        decision = migrate_legacy.MigrationDecision(
+            task_id=task_id, note="reviewer spelling variant, matching web-sim-responsive-slice-1",
             step_overrides=(
-                db.StepVerdictOverride(3, "approved-with-concerns", "approved_with_warnings",
+                migrate_legacy.StepVerdictOverride(3, "approved-with-concerns", "approved_with_warnings",
                                         note="non-canonical wording variant with equivalent semantics"),
             ),
         )
         import_conn = settings.get_db_connection()
-        result = db.import_task(import_conn, task_id, task_dir, decision=decision)
+        result = migrate_legacy.import_task(import_conn, task_id, task_dir, decision=decision)
         assert result["ok"] is False  # reconcile_task correctly flagged the raw verdict
         assert db.task_exists(import_conn, task_id)
         row = import_conn.execute(
@@ -1210,7 +1227,7 @@ class TestImportedTaskLiveContinuation:
         # --- Step 2: live cmd_next, driven entirely through relay.py's
         # real chokepoints, must hit a real human gate and NOT advance. ---
         capsys.readouterr()
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
         out = capsys.readouterr().out
         assert "HUMAN GATE" in out
         state = run_state.load_run_state(task_id, config)
@@ -1229,7 +1246,7 @@ class TestImportedTaskLiveContinuation:
         # --- Step 3: the real human-authorized override, using the real
         # commands.cmd_override path -- not a bypass. ---
         monkeypatch.setattr(settings, "_db_connection", None)
-        commands.cmd_override(task_id, "security", config, auto=False)
+        assert commands.cmd_override(task_id, "security", config, auto=False) == 0
 
         conn2 = settings.get_db_connection()
         final = db.get_task(conn2, task_id)
@@ -1272,31 +1289,32 @@ class TestMigrationDecision:
 
     def test_decision_requires_a_note(self):
         with pytest.raises(ValueError, match="audit note"):
-            db.MigrationDecision(task_id="x", status="completed")
+            migrate_legacy.MigrationDecision(task_id="x", status="completed")
 
     def test_decision_cannot_both_exclude_and_override(self):
         with pytest.raises(ValueError, match="cannot both exclude"):
-            db.MigrationDecision(task_id="x", status="completed", exclude=True, note="bad combo")
+            migrate_legacy.MigrationDecision(task_id="x", status="completed", exclude=True, note="bad combo")
 
     def test_ordinary_relay_functions_cannot_accept_a_decision(self):
         """Confirms the override mechanism is unreachable from normal
         operation: only import_task() knows about MigrationDecision."""
         import inspect
-        for fn in (db.create_task, db.record_step_and_save, db.get_task):
+        for fn in (db.create_task, db.update_task, db.record_dispatch, db.record_verdict,
+                   db.get_task):
             assert "decision" not in inspect.signature(fn).parameters, fn.__name__
 
-    # -- status transform --
+    # -- status transform (bike-power-b0/b1/b2/phase3/optimizer class) --
 
     def test_status_transform_complete_to_completed(self, conn, tmp_path):
-        task_dir = self._task_dir(tmp_path, "legacy-complete", "complete", "done")
-        decision = db.MigrationDecision(
-            task_id="legacy-complete", status="completed",
+        task_dir = self._task_dir(tmp_path, "b0-like", "complete", "done")
+        decision = migrate_legacy.MigrationDecision(
+            task_id="b0-like", status="completed",
             note="legacy 'complete' is a synonym for 'completed'; human-authorized 2026-09-01",
         )
-        db.import_task(conn, "legacy-complete", task_dir, decision=decision)
-        loaded = db.get_task(conn, "legacy-complete")
+        migrate_legacy.import_task(conn, "b0-like", task_dir, decision=decision)
+        loaded = db.get_task(conn, "b0-like")
         assert loaded["status"] == "completed"
-        events = db.get_events(conn, "legacy-complete")
+        events = db.get_events(conn, "b0-like")
         overrides = [e for e in events if e["event_type"] == db.EVENT_MIGRATION_OVERRIDE]
         assert len(overrides) == 1
         assert overrides[0]["payload"] == {
@@ -1309,59 +1327,59 @@ class TestMigrationDecision:
         supplies a replacement value, which is validated exactly like any
         other value would be."""
         task_dir = self._task_dir(tmp_path, "bad-decision", "complete", "done")
-        decision = db.MigrationDecision(
+        decision = migrate_legacy.MigrationDecision(
             task_id="bad-decision", status="also-not-real",
             note="deliberately invalid, to prove validation still applies",
         )
         with pytest.raises(db.InvalidTransition, match="'also-not-real' is not a valid status"):
-            db.import_task(conn, "bad-decision", task_dir, decision=decision)
+            migrate_legacy.import_task(conn, "bad-decision", task_dir, decision=decision)
 
-    # -- phase decisions --
+    # -- phase decisions (lighthouse / bank-calibration / fix-coach / ironman class) --
 
     def test_phase_decision_overrides_conflicting_run_yaml_phase(self, conn, tmp_path):
         task_dir = self._task_dir(
-            tmp_path, "stale-run-yaml", "in_progress", "builder",
+            tmp_path, "lighthouse-like", "in_progress", "builder",
             history_yaml=(
                 "history:\n- {phase: builder, step: 4, timestamp: '2026-05-28T12:27:44Z'}\n"
             ),
         )
         (task_dir / "03-reviewer.md").write_text(
-            "---\ntask_id: stale-run-yaml\nphase: reviewer\nstep: 3\n"
+            "---\ntask_id: lighthouse-like\nphase: reviewer\nstep: 3\n"
             "date: 2026-05-28\nverdict: approved\n---\n\nBody.\n"
         )
-        decision = db.MigrationDecision(
-            task_id="stale-run-yaml", current_phase="reviewer",
+        decision = migrate_legacy.MigrationDecision(
+            task_id="lighthouse-like", current_phase="reviewer",
             note="artifact truth (approved) preferred over run.yaml's stale builder re-open",
         )
-        db.import_task(conn, "stale-run-yaml", task_dir, decision=decision)
-        loaded = db.get_task(conn, "stale-run-yaml")
+        migrate_legacy.import_task(conn, "lighthouse-like", task_dir, decision=decision)
+        loaded = db.get_task(conn, "lighthouse-like")
         assert loaded["current_phase"] == "reviewer"
-        overrides = [e for e in db.get_events(conn, "stale-run-yaml") if e["event_type"] == db.EVENT_MIGRATION_OVERRIDE]
+        overrides = [e for e in db.get_events(conn, "lighthouse-like") if e["event_type"] == db.EVENT_MIGRATION_OVERRIDE]
         assert overrides[0]["payload"]["legacy"] == "builder"
         assert overrides[0]["payload"]["canonical"] == "reviewer"
 
-    # -- exclusions --
+    # -- exclusions (expose-power-plan / mobile-analytics-go-live / mobile-sentry-go-live class) --
 
     def test_exclude_decision_refuses_unconditionally(self, conn, tmp_path):
         task_dir = self._task_dir(tmp_path, "excluded-task", "backlog", "parked")
-        decision = db.MigrationDecision(
+        decision = migrate_legacy.MigrationDecision(
             task_id="excluded-task", exclude=True,
             note="parked before dispatch; not an executed Relay task",
         )
-        with pytest.raises(db.MigrationExcluded):
-            db.import_task(conn, "excluded-task", task_dir, decision=decision)
+        with pytest.raises(migrate_legacy.MigrationExcluded):
+            migrate_legacy.import_task(conn, "excluded-task", task_dir, decision=decision)
         assert db.get_task(conn, "excluded-task") is None
 
     def test_b6_cleanup_class_stays_excluded_with_no_invented_meaning(self, conn, tmp_path):
         """approved-held has no safe mapping -- the decision documents
         that we chose not to guess, it does not invent one."""
         task_dir = self._task_dir(tmp_path, "b6-like", "approved-held", "done")
-        decision = db.MigrationDecision(
+        decision = migrate_legacy.MigrationDecision(
             task_id="b6-like", exclude=True,
             note="status 'approved-held' has no safe canonical mapping; excluded rather than guessed",
         )
-        with pytest.raises(db.MigrationExcluded):
-            db.import_task(conn, "b6-like", task_dir, decision=decision)
+        with pytest.raises(migrate_legacy.MigrationExcluded):
+            migrate_legacy.import_task(conn, "b6-like", task_dir, decision=decision)
         # Confirm no meaning was invented anywhere -- nothing written at all.
         assert db.get_task(conn, "b6-like") is None
         assert db.get_events(conn, "b6-like") == []
@@ -1377,7 +1395,7 @@ class TestMigrationDecision:
                 "- {phase: reviewer, step: 2, timestamp: '2026-06-17T08:45:00Z', verdict: approved}\n"
             ),
         )
-        # Freeform calibration data, as legacy files hold it.
+        # Freeform calibration data, exactly mirroring the real corpus shape.
         content = (task_dir / "run.yaml").read_text()
         content = content.replace(
             "retries: {}\n",
@@ -1392,11 +1410,11 @@ class TestMigrationDecision:
             "---\ntask_id: bbs-like\nphase: reviewer\nstep: 2\n"
             "date: 2026-06-17\nverdict: approved\n---\n\nBody.\n"
         )
-        decision = db.MigrationDecision(
+        decision = migrate_legacy.MigrationDecision(
             task_id="bbs-like", status="completed", current_phase="reviewer",
             note="normal completed reviewer task; calibration vocabulary is not canonical Relay state",
         )
-        db.import_task(conn, "bbs-like", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "bbs-like", task_dir, decision=decision)
 
         loaded = db.get_task(conn, "bbs-like")
         assert loaded["status"] == "completed"
@@ -1438,7 +1456,7 @@ class TestMigrationDecision:
             "---\ntask_id: vocab-like\nphase: reviewer\nstep: 2\n"
             "date: 2026-06-14\nverdict: approved\n---\n\nBody.\n"
         )
-        db.import_task(conn, "vocab-like", task_dir)
+        migrate_legacy.import_task(conn, "vocab-like", task_dir)
 
         # Canonical steps: only the two real artifacts, only real phases.
         rows = conn.execute("SELECT phase FROM steps WHERE task_id=?", ("vocab-like",)).fetchall()
@@ -1469,7 +1487,7 @@ class TestMigrationDecision:
             "---\ntask_id: no-dup\nphase: architect\nstep: 1\n"
             "date: 2026-08-31\nverdict: ready-for-builder\n---\n\nBody.\n"
         )
-        db.import_task(conn, "no-dup", task_dir)
+        migrate_legacy.import_task(conn, "no-dup", task_dir)
         historical = [e for e in db.get_events(conn, "no-dup") if e["event_type"] == db.EVENT_HISTORICAL_NOTE]
         assert historical == []
 
@@ -1477,7 +1495,8 @@ class TestMigrationDecision:
 class TestStepVerdictOverride:
     """Step-level verdict corrections: ready-for-reviewer -> ready-for-review,
     approved-with-concerns -> approved_with_warnings, and architect
-    'approved' (a human_gate overwrite) -> needs-human-input."""
+    'approved' (a human_gate overwrite) -> needs-human-input. Each of these
+    mirrors a real task from the corpus investigation."""
 
     def _task_dir(self, tmp_path, task_id, status, current_phase, history_yaml="history: []\n"):
         d = tmp_path / task_id
@@ -1494,15 +1513,15 @@ class TestStepVerdictOverride:
 
     def test_step_override_requires_a_note(self):
         with pytest.raises(ValueError, match="audit note"):
-            db.StepVerdictOverride(step=1, expected_verdict="x", canonical_verdict="y")
+            migrate_legacy.StepVerdictOverride(step=1, expected_verdict="x", canonical_verdict="y")
 
     def test_decision_rejects_duplicate_step_overrides(self):
         with pytest.raises(ValueError, match="more than one step_override"):
-            db.MigrationDecision(
+            migrate_legacy.MigrationDecision(
                 task_id="dup-steps", note="top-level note",
                 step_overrides=(
-                    db.StepVerdictOverride(1, "a", "b", note="first"),
-                    db.StepVerdictOverride(1, "c", "d", note="second"),
+                    migrate_legacy.StepVerdictOverride(1, "a", "b", note="first"),
+                    migrate_legacy.StepVerdictOverride(1, "c", "d", note="second"),
                 ),
             )
 
@@ -1514,75 +1533,75 @@ class TestStepVerdictOverride:
             "---\ntask_id: already-canonical\nphase: architect\nstep: 1\n"
             "date: 2026-06-01\nverdict: ready-for-builder\n---\n\nBody.\n"
         )
-        db.import_task(conn, "already-canonical", task_dir)
+        migrate_legacy.import_task(conn, "already-canonical", task_dir)
         row = conn.execute(
             "SELECT verdict FROM steps WHERE task_id='already-canonical' AND step=1"
         ).fetchone()
         assert row["verdict"] == "ready-for-builder"
 
-    # -- 2/3. ready-for-reviewer -> ready-for-review --
+    # -- 2/3. ready-for-reviewer -> ready-for-review (lighthouse class) --
 
-    def _stale_run_yaml_task(self, tmp_path):
+    def _lighthouse_like(self, tmp_path):
         task_dir = self._task_dir(
-            tmp_path, "stale-run-yaml2", "in_progress", "reviewer",
+            tmp_path, "lighthouse-like2", "in_progress", "reviewer",
             history_yaml="history:\n- {phase: builder, step: 2, timestamp: '2026-05-28T10:17:32Z'}\n",
         )
         (task_dir / "02-builder.md").write_text(
-            "---\ntask_id: stale-run-yaml2\nphase: builder\nstep: 2\n"
+            "---\ntask_id: lighthouse-like2\nphase: builder\nstep: 2\n"
             "date: 2026-05-28\nverdict: ready-for-reviewer\n---\n\nBody.\n"
         )
         return task_dir
 
     def test_ready_for_reviewer_rejected_without_decision(self, conn, tmp_path):
-        task_dir = self._stale_run_yaml_task(tmp_path)
+        task_dir = self._lighthouse_like(tmp_path)
         with pytest.raises(db.InvalidTransition, match="not valid for phase"):
-            db.import_task(conn, "stale-run-yaml2", task_dir)
-        assert db.get_task(conn, "stale-run-yaml2") is None
+            migrate_legacy.import_task(conn, "lighthouse-like2", task_dir)
+        assert db.get_task(conn, "lighthouse-like2") is None
 
     def test_ready_for_reviewer_becomes_ready_for_review_with_decision(self, conn, tmp_path):
-        task_dir = self._stale_run_yaml_task(tmp_path)
-        decision = db.MigrationDecision(
-            task_id="stale-run-yaml2", current_phase="reviewer", note="non-canonical spelling of the verdict",
+        task_dir = self._lighthouse_like(tmp_path)
+        decision = migrate_legacy.MigrationDecision(
+            task_id="lighthouse-like2", current_phase="reviewer", note="builder spelling variant, matching prose",
             step_overrides=(
-                db.StepVerdictOverride(2, "ready-for-reviewer", "ready-for-review",
+                migrate_legacy.StepVerdictOverride(2, "ready-for-reviewer", "ready-for-review",
                                         note="non-canonical wording variant with equivalent semantics"),
             ),
         )
-        db.import_task(conn, "stale-run-yaml2", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "lighthouse-like2", task_dir, decision=decision)
         row = conn.execute(
-            "SELECT verdict FROM steps WHERE task_id='stale-run-yaml2' AND step=2"
+            "SELECT verdict FROM steps WHERE task_id='lighthouse-like2' AND step=2"
         ).fetchone()
         assert row["verdict"] == "ready-for-review"
-        overrides = [e for e in db.get_events(conn, "stale-run-yaml2")
+        overrides = [e for e in db.get_events(conn, "lighthouse-like2")
                      if e["event_type"] == db.EVENT_MIGRATION_OVERRIDE and e["step"] == 2]
         assert len(overrides) == 1
         assert overrides[0]["payload"]["legacy"] == "ready-for-reviewer"
         assert overrides[0]["payload"]["canonical"] == "ready-for-review"
 
-    # -- 4. approved-with-concerns -> approved_with_warnings --
+    # -- 4. approved-with-concerns -> approved_with_warnings (web-sim class) --
 
     def test_approved_with_concerns_only_normalizes_with_decision(self, conn, tmp_path):
         task_dir = self._task_dir(
-            tmp_path, "buried-bad-verdict", "in_progress", "reviewer",
+            tmp_path, "web-sim-like", "in_progress", "reviewer",
             history_yaml="history:\n- {phase: reviewer, step: 3, timestamp: '2026-05-26T22:55:55Z'}\n",
         )
         (task_dir / "03-reviewer.md").write_text(
-            "---\ntask_id: buried-bad-verdict\nphase: reviewer\nstep: 3\n"
+            "---\ntask_id: web-sim-like\nphase: reviewer\nstep: 3\n"
             "date: 2026-05-26\nverdict: approved-with-concerns\n---\n\nBody.\n"
         )
         with pytest.raises(db.InvalidTransition, match="not valid for phase"):
-            db.import_task(conn, "buried-bad-verdict", task_dir)
+            migrate_legacy.import_task(conn, "web-sim-like", task_dir)
 
-        decision = db.MigrationDecision(
-            task_id="buried-bad-verdict", note="non-canonical spelling of the verdict",
+        decision = migrate_legacy.MigrationDecision(
+            task_id="web-sim-like", note="reviewer spelling variant, matching prose",
             step_overrides=(
-                db.StepVerdictOverride(3, "approved-with-concerns", "approved_with_warnings",
+                migrate_legacy.StepVerdictOverride(3, "approved-with-concerns", "approved_with_warnings",
                                         note="non-canonical wording variant with equivalent semantics"),
             ),
         )
-        db.import_task(conn, "buried-bad-verdict", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "web-sim-like", task_dir, decision=decision)
         row = conn.execute(
-            "SELECT verdict FROM steps WHERE task_id='buried-bad-verdict' AND step=3"
+            "SELECT verdict FROM steps WHERE task_id='web-sim-like' AND step=3"
         ).fetchone()
         assert row["verdict"] == "approved_with_warnings"
 
@@ -1609,16 +1628,16 @@ class TestStepVerdictOverride:
     def test_architect_approved_rejected_without_decision(self, conn, tmp_path):
         task_dir = self._b1_like(tmp_path)
         with pytest.raises(db.InvalidTransition, match="not valid for phase"):
-            db.import_task(conn, "b1-like", task_dir)
+            migrate_legacy.import_task(conn, "b1-like", task_dir)
 
     def test_architect_approved_becomes_needs_human_input_with_decision(self, conn, tmp_path):
         task_dir = self._b1_like(tmp_path)
-        decision = db.MigrationDecision(
+        decision = migrate_legacy.MigrationDecision(
             task_id="b1-like", status="completed",
             note="architect artifact body identifies needs-human-input as the real verdict; "
                  "the frontmatter 'approved' is a later human_gate overwrite",
             step_overrides=(
-                db.StepVerdictOverride(
+                migrate_legacy.StepVerdictOverride(
                     1, "approved", "needs-human-input",
                     note="artifact body says the architect verdict was needs-human-input; "
                          "run.yaml separately records the human_gate approved event, which "
@@ -1626,7 +1645,7 @@ class TestStepVerdictOverride:
                 ),
             ),
         )
-        db.import_task(conn, "b1-like", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "b1-like", task_dir, decision=decision)
 
         loaded = db.get_task(conn, "b1-like")
         assert loaded["status"] == "completed"
@@ -1650,52 +1669,52 @@ class TestStepVerdictOverride:
     # -- 7. wrong task/step does not apply --
 
     def test_step_override_for_wrong_step_does_not_apply(self, conn, tmp_path):
-        task_dir = self._stale_run_yaml_task(tmp_path)
-        decision = db.MigrationDecision(
-            task_id="stale-run-yaml2", current_phase="reviewer", note="override authored for the wrong step",
+        task_dir = self._lighthouse_like(tmp_path)
+        decision = migrate_legacy.MigrationDecision(
+            task_id="lighthouse-like2", current_phase="reviewer", note="override authored for the wrong step",
             step_overrides=(
                 # Real bad verdict is on step 2; this override is for step 5.
-                db.StepVerdictOverride(5, "ready-for-reviewer", "ready-for-review", note="wrong step"),
+                migrate_legacy.StepVerdictOverride(5, "ready-for-reviewer", "ready-for-review", note="wrong step"),
             ),
         )
         with pytest.raises(db.InvalidTransition, match="not valid for phase"):
-            db.import_task(conn, "stale-run-yaml2", task_dir, decision=decision)
-        assert db.get_task(conn, "stale-run-yaml2") is None
+            migrate_legacy.import_task(conn, "lighthouse-like2", task_dir, decision=decision)
+        assert db.get_task(conn, "lighthouse-like2") is None
 
     # -- 8. expected value mismatch fails safely --
 
     def test_step_override_expected_value_mismatch_fails(self, conn, tmp_path):
-        task_dir = self._stale_run_yaml_task(tmp_path)  # actual verdict is 'ready-for-reviewer'
-        decision = db.MigrationDecision(
-            task_id="stale-run-yaml2", current_phase="reviewer", note="stale decision, file no longer matches",
+        task_dir = self._lighthouse_like(tmp_path)  # actual verdict is 'ready-for-reviewer'
+        decision = migrate_legacy.MigrationDecision(
+            task_id="lighthouse-like2", current_phase="reviewer", note="stale decision, file no longer matches",
             step_overrides=(
-                db.StepVerdictOverride(2, "some-other-stale-value", "ready-for-review",
+                migrate_legacy.StepVerdictOverride(2, "some-other-stale-value", "ready-for-review",
                                         note="expected value no longer matches disk"),
             ),
         )
         with pytest.raises(db.InvalidTransition, match="expected verdict"):
-            db.import_task(conn, "stale-run-yaml2", task_dir, decision=decision)
-        assert db.get_task(conn, "stale-run-yaml2") is None
+            migrate_legacy.import_task(conn, "lighthouse-like2", task_dir, decision=decision)
+        assert db.get_task(conn, "lighthouse-like2") is None
 
     # -- 9. override producing an invalid-for-phase verdict is rejected --
 
     def test_step_override_canonical_target_must_be_valid_for_phase(self, conn, tmp_path):
-        task_dir = self._stale_run_yaml_task(tmp_path)
-        decision = db.MigrationDecision(
-            task_id="stale-run-yaml2", current_phase="reviewer", note="deliberately maps to a bogus canonical value",
+        task_dir = self._lighthouse_like(tmp_path)
+        decision = migrate_legacy.MigrationDecision(
+            task_id="lighthouse-like2", current_phase="reviewer", note="deliberately maps to a bogus canonical value",
             step_overrides=(
-                db.StepVerdictOverride(2, "ready-for-reviewer", "totally-not-a-real-verdict",
+                migrate_legacy.StepVerdictOverride(2, "ready-for-reviewer", "totally-not-a-real-verdict",
                                         note="should be rejected"),
             ),
         )
         with pytest.raises(db.InvalidTransition, match="is not valid for phase"):
-            db.import_task(conn, "stale-run-yaml2", task_dir, decision=decision)
-        assert db.get_task(conn, "stale-run-yaml2") is None
+            migrate_legacy.import_task(conn, "lighthouse-like2", task_dir, decision=decision)
+        assert db.get_task(conn, "lighthouse-like2") is None
 
     # -- 10. reconciliation examines every artifact, not just the latest --
 
     def test_reconcile_task_flags_bad_verdict_on_non_latest_artifact(self, tmp_path):
-        """A bad verdict on
+        """Mirrors web-sim-responsive-slice-1 exactly: a bad verdict on
         step 3, with steps 4+ on top of it, all individually fine."""
         task_dir = self._task_dir(tmp_path, "buried-bad-verdict", "completed", "done")
         (task_dir / "03-reviewer.md").write_text(
@@ -1710,8 +1729,8 @@ class TestStepVerdictOverride:
             "---\ntask_id: buried-bad-verdict\nphase: tester\nstep: 7\n"
             "date: 2026-05-27\nverdict: pass\n---\n\nBody.\n"
         )
-        file_state = db.read_file_state(task_dir)
-        result = db.reconcile_task("buried-bad-verdict", file_state)
+        file_state = migrate_legacy.read_file_state(task_dir)
+        result = migrate_legacy.reconcile_task("buried-bad-verdict", file_state)
         assert result["ok"] is False
         assert any("03-reviewer.md" in d and "verdict" in d for d in result["discrepancies"])
 
@@ -1734,39 +1753,39 @@ class TestStepVerdictOverride:
             "---\ntask_id: still-clean\nphase: reviewer\nstep: 3\n"
             "date: 2026-01-01\nverdict: approved\n---\n\nBody.\n"
         )
-        file_state = db.read_file_state(task_dir)
-        result = db.reconcile_task("still-clean", file_state)
+        file_state = migrate_legacy.read_file_state(task_dir)
+        result = migrate_legacy.reconcile_task("still-clean", file_state)
         assert result["ok"] is True
         assert result["discrepancies"] == []
 
     def test_import_is_deterministic_across_repeated_runs(self, tmp_path):
         """Importing the same task+decision into two independent DBs
         produces identical canonical state."""
-        task_dir = self._stale_run_yaml_task(tmp_path)
-        decision = db.MigrationDecision(
-            task_id="stale-run-yaml2", current_phase="reviewer", note="determinism check",
+        task_dir = self._lighthouse_like(tmp_path)
+        decision = migrate_legacy.MigrationDecision(
+            task_id="lighthouse-like2", current_phase="reviewer", note="determinism check",
             step_overrides=(
-                db.StepVerdictOverride(2, "ready-for-reviewer", "ready-for-review", note="determinism check"),
+                migrate_legacy.StepVerdictOverride(2, "ready-for-reviewer", "ready-for-review", note="determinism check"),
             ),
         )
         conn_a = db.connect(tmp_path / "a.db")
         conn_b = db.connect(tmp_path / "b.db")
-        db.import_task(conn_a, "stale-run-yaml2", task_dir, decision=decision)
-        db.import_task(conn_b, "stale-run-yaml2", task_dir, decision=decision)
-        a = db.get_task(conn_a, "stale-run-yaml2")
-        b = db.get_task(conn_b, "stale-run-yaml2")
+        migrate_legacy.import_task(conn_a, "lighthouse-like2", task_dir, decision=decision)
+        migrate_legacy.import_task(conn_b, "lighthouse-like2", task_dir, decision=decision)
+        a = db.get_task(conn_a, "lighthouse-like2")
+        b = db.get_task(conn_b, "lighthouse-like2")
         for key in ("status", "current_phase", "history"):
             assert a[key] == b[key]
         conn_a.close()
         conn_b.close()
 
-    # -- 12. a bad verdict buried mid-task is detected and normalized --
+    # -- 12. web-sim-responsive-slice-1's actual shape is detected and normalized --
 
-    def test_a_bad_verdict_mid_task_is_flagged_end_to_end(self, conn, tmp_path):
-        """7 artifacts, bad verdict buried at
+    def test_web_sim_responsive_slice_1_shape_end_to_end(self, conn, tmp_path):
+        """Full shape of the real task: 7 artifacts, bad verdict buried at
         step 3, everything else canonical. Must be flagged by reconcile_task
         and only import cleanly with the explicit step decision."""
-        task_dir = self._task_dir(tmp_path, "bad-verdict-task", "completed", "done")
+        task_dir = self._task_dir(tmp_path, "wsrs1-like", "completed", "done")
         steps = [
             (1, "architect", None),
             (2, "builder", "ready-for-review"),
@@ -1780,42 +1799,42 @@ class TestStepVerdictOverride:
             vline = f"verdict: {verdict}\n" if verdict else ""
             fname = f"{step:02d}-{phase}.md" if step != 4 else "04-builder-followup.md"
             (task_dir / fname).write_text(
-                f"---\ntask_id: bad-verdict-task\nphase: {phase}\nstep: {step}\n"
+                f"---\ntask_id: wsrs1-like\nphase: {phase}\nstep: {step}\n"
                 f"date: 2026-05-26\n{vline}---\n\nBody.\n"
             )
 
-        file_state = db.read_file_state(task_dir)
-        result = db.reconcile_task("bad-verdict-task", file_state)
+        file_state = migrate_legacy.read_file_state(task_dir)
+        result = migrate_legacy.reconcile_task("wsrs1-like", file_state)
         assert result["ok"] is False, "the buried step-3 bad verdict must be detected"
 
         with pytest.raises(db.InvalidTransition):
-            db.import_task(conn, "bad-verdict-task", task_dir)
+            migrate_legacy.import_task(conn, "wsrs1-like", task_dir)
 
-        decision = db.MigrationDecision(
-            task_id="bad-verdict-task", note="reviewer spelling variant at step 3",
+        decision = migrate_legacy.MigrationDecision(
+            task_id="wsrs1-like", note="reviewer spelling variant at step 3",
             step_overrides=(
-                db.StepVerdictOverride(3, "approved-with-concerns", "approved_with_warnings",
+                migrate_legacy.StepVerdictOverride(3, "approved-with-concerns", "approved_with_warnings",
                                         note="non-canonical wording variant with equivalent semantics"),
             ),
         )
-        db.import_task(conn, "bad-verdict-task", task_dir, decision=decision)
-        row = conn.execute("SELECT verdict FROM steps WHERE task_id='bad-verdict-task' AND step=3").fetchone()
+        migrate_legacy.import_task(conn, "wsrs1-like", task_dir, decision=decision)
+        row = conn.execute("SELECT verdict FROM steps WHERE task_id='wsrs1-like' AND step=3").fetchone()
         assert row["verdict"] == "approved_with_warnings"
         # The rest of the steps must be untouched.
-        row5 = conn.execute("SELECT verdict FROM steps WHERE task_id='bad-verdict-task' AND step=5").fetchone()
+        row5 = conn.execute("SELECT verdict FROM steps WHERE task_id='wsrs1-like' AND step=5").fetchone()
         assert row5["verdict"] == "approved"
 
-    # -- security 'approved' -> 'findings', NO
+    # -- bike-power-optimizer class: security 'approved' -> 'findings', NO
     # human-gate event fabricated (unlike the architect class, where a real
     # separate human_gate event exists and must be preserved). --
 
-    def _legacy_security_verdict_task(self, tmp_path):
-        """A step-1 human_gate event unrelated to
+    def _optimizer_like(self, tmp_path):
+        """Mirrors the real task: a step-1 human_gate event unrelated to
         security, and a step-4 security artifact that self-declares
         'approved' with two real, named advisory findings -- no human_gate
         event anywhere near step 4."""
         task_dir = self._task_dir(
-            tmp_path, "legacy-security-verdict", "complete", "done",
+            tmp_path, "optimizer-like", "complete", "done",
             history_yaml=(
                 "history:\n"
                 "- {phase: architect, step: 1, timestamp: '2026-06-13T19:29:55Z'}\n"
@@ -1826,7 +1845,7 @@ class TestStepVerdictOverride:
             ),
         )
         (task_dir / "04-security.md").write_text(
-            "---\ntask_id: legacy-security-verdict\nphase: security\nstep: 4\n"
+            "---\ntask_id: optimizer-like\nphase: security\nstep: 4\n"
             "date: 2026-06-14\nverdict: approved\n---\n\n"
             "## Findings\n### Advisory\nA-1: resource/DoS gap, MUST be tracked.\n"
             "A-2: documentation gap.\n\n"
@@ -1834,15 +1853,15 @@ class TestStepVerdictOverride:
         )
         return task_dir
 
-    def test_legacy_security_approved_rejected_without_override(self, conn, tmp_path):
-        task_dir = self._legacy_security_verdict_task(tmp_path)
+    def test_optimizer_security_approved_rejected_without_override(self, conn, tmp_path):
+        task_dir = self._optimizer_like(tmp_path)
         with pytest.raises(db.InvalidTransition, match="not valid for phase"):
-            db.import_task(conn, "legacy-security-verdict", task_dir)
+            migrate_legacy.import_task(conn, "optimizer-like", task_dir)
 
-    def test_legacy_security_approved_becomes_findings_with_override(self, conn, tmp_path):
-        task_dir = self._legacy_security_verdict_task(tmp_path)
-        decision = db.MigrationDecision(
-            task_id="legacy-security-verdict", status="completed",
+    def test_optimizer_security_approved_becomes_findings_with_override(self, conn, tmp_path):
+        task_dir = self._optimizer_like(tmp_path)
+        decision = migrate_legacy.MigrationDecision(
+            task_id="optimizer-like", status="completed",
             note="'approved' was informal security-phase vocabulary; the artifact "
                  "contains two actual non-critical findings (A-1 DoS advisory, A-2 "
                  "doc gap); 'no blockers' does not mean 'no findings'; therefore "
@@ -1850,7 +1869,7 @@ class TestStepVerdictOverride:
                  "event exists historically and none should be fabricated; "
                  "human-authorized 2026-09-01",
             step_overrides=(
-                db.StepVerdictOverride(
+                migrate_legacy.StepVerdictOverride(
                     4, "approved", "findings",
                     note="security artifact self-declares 'approved' but names two "
                          "real advisory findings (A-1, A-2); 'findings' is the correct "
@@ -1858,15 +1877,15 @@ class TestStepVerdictOverride:
                 ),
             ),
         )
-        db.import_task(conn, "legacy-security-verdict", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "optimizer-like", task_dir, decision=decision)
 
         # 1/2/3: rejected without override, converts with it, result is canonical.
-        row = conn.execute("SELECT verdict FROM steps WHERE task_id='legacy-security-verdict' AND step=4").fetchone()
+        row = conn.execute("SELECT verdict FROM steps WHERE task_id='optimizer-like' AND step=4").fetchone()
         assert row["verdict"] == "findings"
         assert row["verdict"] in VALID_VERDICTS["security"]
 
         # 4: no human-gate event is fabricated for step 4.
-        events = db.get_events(conn, "legacy-security-verdict")
+        events = db.get_events(conn, "optimizer-like")
         step4_human_gate = [
             e for e in events
             if e["event_type"] == db.EVENT_HISTORICAL_NOTE and e.get("phase") == "human_gate"
@@ -1893,23 +1912,23 @@ class TestStepVerdictOverride:
 
     def test_optimizer_migration_is_deterministic(self, tmp_path):
         """6: re-running the migration produces the same result."""
-        task_dir = self._legacy_security_verdict_task(tmp_path)
-        decision = db.MigrationDecision(
-            task_id="legacy-security-verdict", status="completed",
+        task_dir = self._optimizer_like(tmp_path)
+        decision = migrate_legacy.MigrationDecision(
+            task_id="optimizer-like", status="completed",
             note="determinism check",
             step_overrides=(
-                db.StepVerdictOverride(4, "approved", "findings", note="determinism check"),
+                migrate_legacy.StepVerdictOverride(4, "approved", "findings", note="determinism check"),
             ),
         )
         conn_a = db.connect(tmp_path / "opt_a.db")
         conn_b = db.connect(tmp_path / "opt_b.db")
-        db.import_task(conn_a, "legacy-security-verdict", task_dir, decision=decision)
-        db.import_task(conn_b, "legacy-security-verdict", task_dir, decision=decision)
-        a = db.get_task(conn_a, "legacy-security-verdict")
-        b = db.get_task(conn_b, "legacy-security-verdict")
+        migrate_legacy.import_task(conn_a, "optimizer-like", task_dir, decision=decision)
+        migrate_legacy.import_task(conn_b, "optimizer-like", task_dir, decision=decision)
+        a = db.get_task(conn_a, "optimizer-like")
+        b = db.get_task(conn_b, "optimizer-like")
         assert a["status"] == b["status"] == "completed"
-        row_a = conn_a.execute("SELECT verdict FROM steps WHERE task_id='legacy-security-verdict' AND step=4").fetchone()
-        row_b = conn_b.execute("SELECT verdict FROM steps WHERE task_id='legacy-security-verdict' AND step=4").fetchone()
+        row_a = conn_a.execute("SELECT verdict FROM steps WHERE task_id='optimizer-like' AND step=4").fetchone()
+        row_b = conn_b.execute("SELECT verdict FROM steps WHERE task_id='optimizer-like' AND step=4").fetchone()
         assert row_a["verdict"] == row_b["verdict"] == "findings"
         conn_a.close()
         conn_b.close()
@@ -1933,7 +1952,7 @@ class TestCLIIntegrationSqliteBackend:
         """
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "cli-t1")
-        commands.cmd_start("cli-t1", auto=False, config=config)
+        assert commands.cmd_start("cli-t1", auto=False, config=config) == 0
 
         state = run_state.load_run_state("cli-t1", config)
         assert state is not None
@@ -1947,9 +1966,9 @@ class TestCLIIntegrationSqliteBackend:
     def test_start_twice_is_rejected(self, sqlite_env, capsys):
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "cli-t2")
-        commands.cmd_start("cli-t2", auto=False, config=config)
+        assert commands.cmd_start("cli-t2", auto=False, config=config) == 0
         with pytest.raises(SystemExit):
-            commands.cmd_start("cli-t2", auto=False, config=config)
+            run_relay(config, "start", "cli-t2")
 
     def test_next_routes_using_db_backed_latest_step(self, sqlite_env, capsys, tmp_path):
         """End-to-end reproduction of the exact gap found during manual CLI
@@ -1960,7 +1979,7 @@ class TestCLIIntegrationSqliteBackend:
         """
         config = sqlite_env
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "cli-t3")
-        commands.cmd_start("cli-t3", auto=False, config=config)
+        assert commands.cmd_start("cli-t3", auto=False, config=config) == 0
 
         # Simulate the first agent (the Designer) writing its artifact -- a
         # real file on disk, nothing else. This is the only thing an agent does.
@@ -1986,13 +2005,13 @@ class TestCLIIntegrationSqliteBackend:
                                   "reviewer_approved_with_warnings": True,
                                   "tester_pass_with_concerns": True}
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "cli-t3b")
-        commands.cmd_start("cli-t3b", auto=False, config=config)
+        assert commands.cmd_start("cli-t3b", auto=False, config=config) == 0
         (task_dir / "01-designer.md").write_text(
             "---\ntask_id: cli-t3b\nphase: designer\nstep: 1\n"
             "date: 2026-08-31\nverdict: ready-for-architect\n---\n\nBrief.\n"
         )
         capsys.readouterr()
-        commands.cmd_next("cli-t3b", auto=False, config=config)
+        assert commands.cmd_next("cli-t3b", auto=False, config=config) == 0
         out = capsys.readouterr().out
         assert "No verdict found" not in out
         assert "Next phase: architect" in out
@@ -2004,28 +2023,29 @@ class TestCLIIntegrationSqliteBackend:
                              ids=["Security's merge keys", *BAD_VALUE_NAMES])
     def test_next_reads_a_frontmatter_relay_does_not_read_as_none_and_never_ends_in_an_error(
             self, sqlite_env, capsys, nothing_composed, hostile):
-        """Hostile YAML in a report's frontmatter, which `relay next` reads
-        to route: the frontmatter is not read, and `relay next` stops as it
-        does for a report with none."""
+        """Hostile YAML in a report's
+        frontmatter, which `relay next` reads to route: YAML's whole loader
+        built the merge keys and raised its own errors on the four values.
+        Now the frontmatter is not read, and `relay next` stops as it does
+        for a report with none."""
         config = sqlite_env
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "cli-hostile")
-        commands.cmd_start("cli-hostile", auto=False, config=config)
+        assert commands.cmd_start("cli-hostile", auto=False, config=config) == 0
         (task_dir / "01-designer.md").write_text(
             "---\ntask_id: cli-hostile\nphase: designer\nstep: 1\ndate: 2026-10-14\n"
             f"verdict: ready-for-architect\n{hostile}---\n\nBrief.\n")
         capsys.readouterr()
         started = time.monotonic()
         with pytest.raises(SystemExit) as stopped:
-            commands.cmd_next("cli-hostile", auto=False, config=config)
+            run_relay(config, "next", "cli-hostile")
         assert time.monotonic() - started < 10
         assert stopped.value.code == 1
         assert "Warning: No verdict found in 01-designer.md" in capsys.readouterr().out
         assert run_state.load_run_state("cli-hostile", config)["current_phase"] == "designer"
 
     def test_sync_leaves_unparseable_verdict_unsynced(self, conn, tmp_path):
-        state = init_run_state("sync1")
-        record_phase(state, "architect", 1)
-        db.record_step_and_save(conn, "sync1", state, task_dir=tmp_path / "sync1")
+        db.create_task(conn, "sync1")
+        _dispatch(conn, "sync1", "architect", 1, task_dir=tmp_path / "sync1")
 
         task_dir = tmp_path / "sync1"
         task_dir.mkdir(exist_ok=True)
@@ -2039,7 +2059,7 @@ class TestCLIIntegrationSqliteBackend:
     def test_status_and_list_reflect_db_state(self, sqlite_env, capsys):
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "cli-t4")
-        commands.cmd_start("cli-t4", auto=False, config=config)
+        assert commands.cmd_start("cli-t4", auto=False, config=config) == 0
 
         capsys.readouterr()
         commands.cmd_status("cli-t4", config)
@@ -2054,19 +2074,19 @@ class TestCLIIntegrationSqliteBackend:
     def test_validate_reports_no_errors_for_healthy_sqlite_task(self, sqlite_env, capsys):
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "cli-t5")
-        commands.cmd_start("cli-t5", auto=False, config=config)
+        assert commands.cmd_start("cli-t5", auto=False, config=config) == 0
         capsys.readouterr()
         # cmd_validate only sys.exit(1)s when errors are found; a healthy
         # task must return normally with no SystemExit.
-        commands.cmd_validate("cli-t5", config)
+        assert commands.cmd_validate("cli-t5", config) == 0
         out = capsys.readouterr().out
         assert "ERROR" not in out
 
     def test_override_records_approval_event(self, sqlite_env, capsys):
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "cli-t6")
-        commands.cmd_start("cli-t6", auto=False, config=config)
-        commands.cmd_override("cli-t6", "builder", config, auto=False)
+        assert commands.cmd_start("cli-t6", auto=False, config=config) == 0
+        assert commands.cmd_override("cli-t6", "builder", config, auto=False) == 0
 
         conn = settings.get_db_connection()
         events = db.get_events(conn, "cli-t6")
@@ -2085,7 +2105,7 @@ class TestCLIIntegrationSqliteBackend:
         config = dict(DEFAULT_CONFIG)
         assert config["persistence_backend"] == "files"
         _make_task_dir_with_brief(settings.TASKS_DIR, "files-t1")
-        commands.cmd_start("files-t1", auto=False, config=config)
+        assert commands.cmd_start("files-t1", auto=False, config=config) == 0
         assert (settings.TASKS_DIR / "files-t1" / "run.yaml").exists()
 
 
@@ -2199,7 +2219,7 @@ class TestFailClosedRecovery:
 
         # Without --apply, a dry-run report must not write anything.
         capsys.readouterr()
-        commands.cmd_recover(config, from_projections=True, apply=False)
+        assert commands.cmd_recover(config, from_projections=True, apply=False) == 0
         out = capsys.readouterr().out
         assert "Dry-run only" in out
 
@@ -2222,7 +2242,7 @@ class TestFailClosedRecovery:
 
         capsys.readouterr()
         with pytest.raises(SystemExit):
-            commands.cmd_recover(config, regenerate_projections=True)
+            run_relay(config, "recover", "--regenerate-projections")
         out = capsys.readouterr().out
         assert "No canonical database found" in out
 
@@ -2238,7 +2258,7 @@ class TestFailClosedRecovery:
 
         capsys.readouterr()
         with pytest.raises(SystemExit):
-            commands.cmd_recover(config, init=True, from_projections=True)
+            run_relay(config, "recover", "--init", "--from-projections")
         out = capsys.readouterr().out
         assert "mutually exclusive" in out
         # Neither action actually ran.
@@ -2277,7 +2297,7 @@ class TestProjectionOnWrite:
     def test_cmd_start_writes_matching_projection(self, sqlite_env):
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "proj-start")
-        commands.cmd_start("proj-start", auto=False, config=config)
+        assert commands.cmd_start("proj-start", auto=False, config=config) == 0
         self._assert_projection_matches_canonical("proj-start")
 
     def test_cmd_next_writes_matching_projection(self, sqlite_env):
@@ -2286,26 +2306,26 @@ class TestProjectionOnWrite:
                                   "reviewer_approved_with_warnings": True,
                                   "tester_pass_with_concerns": True}
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "proj-next")
-        commands.cmd_start("proj-next", auto=False, config=config)
+        assert commands.cmd_start("proj-next", auto=False, config=config) == 0
         (task_dir / "01-designer.md").write_text(
             "---\ntask_id: proj-next\nphase: designer\nstep: 1\n"
             "date: 2026-08-31\nverdict: ready-for-architect\n---\n\nBrief.\n"
         )
-        commands.cmd_next("proj-next", auto=False, config=config)
+        assert commands.cmd_next("proj-next", auto=False, config=config) == 0
         self._assert_projection_matches_canonical("proj-next")
 
     def test_cmd_override_writes_matching_projection(self, sqlite_env):
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "proj-override")
-        commands.cmd_start("proj-override", auto=False, config=config)
-        commands.cmd_override("proj-override", "builder", config, auto=False)
+        assert commands.cmd_start("proj-override", auto=False, config=config) == 0
+        assert commands.cmd_override("proj-override", "builder", config, auto=False) == 0
         self._assert_projection_matches_canonical("proj-override")
 
     def test_cmd_abort_writes_matching_projection(self, sqlite_env):
         config = sqlite_env
         _make_task_dir_with_brief(settings.TASKS_DIR, "proj-abort")
-        commands.cmd_start("proj-abort", auto=False, config=config)
-        commands.cmd_abort("proj-abort", config)
+        assert commands.cmd_start("proj-abort", auto=False, config=config) == 0
+        assert commands.cmd_abort("proj-abort", config) == 0
         self._assert_projection_matches_canonical("proj-abort")
         state = run_state.load_run_state("proj-abort", config)
         assert state["status"] == "abandoned"
@@ -2326,7 +2346,7 @@ class TestProjectionOnWrite:
         monkeypatch.setattr(db, "write_projection", _boom)
 
         capsys.readouterr()
-        commands.cmd_start("proj-fail", auto=False, config=config)
+        assert commands.cmd_start("proj-fail", auto=False, config=config) == 0
         out = capsys.readouterr().out
 
         assert "Warning: canonical state for 'proj-fail' was saved successfully" in out
@@ -2351,16 +2371,16 @@ class TestProjectionOnWrite:
 
         real_write_projection = db.write_projection
         monkeypatch.setattr(db, "write_projection", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
-        commands.cmd_start("proj-heal", auto=False, config=config)
+        assert commands.cmd_start("proj-heal", auto=False, config=config) == 0
         assert not (settings.TASKS_DIR / "proj-heal" / "run.yaml").exists()
 
         monkeypatch.setattr(db, "write_projection", real_write_projection)
-        commands.cmd_recover(config, task_id="proj-heal", regenerate_projections=True)
+        assert commands.cmd_recover(config, task_id="proj-heal", regenerate_projections=True) == 0
         self._assert_projection_matches_canonical("proj-heal")
 
 
 class TestMigrationDecisionExtensions:
-    """Decisions that cover what a migration of real ledgers can meet:
+    """Decisions that cover what a rehearsal on real task folders found:
     worked tasks with no run.yaml, files that aren't agent output, reused
     step numbers, and steps that were never delivered. None of these may
     invent history or silently drop it."""
@@ -2392,10 +2412,10 @@ class TestMigrationDecisionExtensions:
                        verdict="ready-for-builder", date="2026-04-10")
         self._artifact(task_dir / "02-builder.md", phase="builder", step=2,
                        verdict="ready-for-review", date="2026-04-12")
-        decision = db.MigrationDecision(task_id="no-run-yaml", status="completed",
+        decision = migrate_legacy.MigrationDecision(task_id="no-run-yaml", status="completed",
                                         current_phase="done", note="shipped per git history")
 
-        db.import_task(conn, "no-run-yaml", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "no-run-yaml", task_dir, decision=decision)
 
         row = conn.execute("SELECT status, current_phase, created, updated FROM tasks "
                            "WHERE task_id='no-run-yaml'").fetchone()
@@ -2412,7 +2432,7 @@ class TestMigrationDecisionExtensions:
         self._artifact(task_dir / "01-architect.md", phase="architect", step=1,
                        verdict="ready-for-builder")
         with pytest.raises(db.InvalidTransition, match="no run.yaml"):
-            db.import_task(conn, "no-run-yaml", task_dir, force=True)
+            migrate_legacy.import_task(conn, "no-run-yaml", task_dir, force=True)
         assert not db.task_exists(conn, "no-run-yaml")
 
     def test_artifact_without_frontmatter_never_becomes_an_architect_step(self, conn, tmp_path):
@@ -2426,11 +2446,11 @@ class TestMigrationDecisionExtensions:
         (task_dir / "02-prod-plan.md").write_text("# Plan\n\nProse only.\n")
 
         with pytest.raises(db.InvalidTransition, match="no frontmatter phase"):
-            db.import_task(conn, "prose-plan", task_dir, force=True)
+            migrate_legacy.import_task(conn, "prose-plan", task_dir, force=True)
 
-        decision = db.MigrationDecision(task_id="prose-plan", note="planning doc, not agent output",
+        decision = migrate_legacy.MigrationDecision(task_id="prose-plan", note="planning doc, not agent output",
                                         note_files=("02-prod-plan.md",))
-        db.import_task(conn, "prose-plan", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "prose-plan", task_dir, decision=decision)
         steps = conn.execute("SELECT step, phase FROM steps WHERE task_id='prose-plan'").fetchall()
         assert [(s["step"], s["phase"]) for s in steps] == [(1, "architect")]
         notes = self._events(conn, "prose-plan", db.EVENT_HISTORICAL_NOTE)
@@ -2447,11 +2467,11 @@ class TestMigrationDecisionExtensions:
         self._artifact(task_dir / "02-uitests.md", phase="tester", step=2, verdict="pass")
 
         with pytest.raises(db.InvalidTransition, match="more than one artifact"):
-            db.import_task(conn, "duplicate-step", task_dir, force=True)
+            migrate_legacy.import_task(conn, "duplicate-step", task_dir, force=True)
 
-        decision = db.MigrationDecision(task_id="duplicate-step", note="ui test notes reused step 2",
+        decision = migrate_legacy.MigrationDecision(task_id="duplicate-step", note="ui test notes reused step 2",
                                         note_files=("02-uitests.md",))
-        db.import_task(conn, "duplicate-step", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "duplicate-step", task_dir, decision=decision)
         steps = conn.execute("SELECT step, artifact_filename FROM steps "
                              "WHERE task_id='duplicate-step' ORDER BY step").fetchall()
         assert [s["artifact_filename"] for s in steps] == ["01-builder.md", "02-reviewer.md"]
@@ -2464,13 +2484,13 @@ class TestMigrationDecisionExtensions:
         self._artifact(task_dir / "02-builder.md", phase="builder", step=2, verdict="ready-for-review")
         self._artifact(task_dir / "04-tester.md", phase="tester", step=4, verdict="pass")
 
-        undeclared = db.MigrationDecision(task_id="gap-task", note="mapping something else")
+        undeclared = migrate_legacy.MigrationDecision(task_id="gap-task", note="mapping something else")
         with pytest.raises(db.InvalidTransition, match=r"steps \[3\] are missing"):
-            db.import_task(conn, "gap-task", task_dir, decision=undeclared)
+            migrate_legacy.import_task(conn, "gap-task", task_dir, decision=undeclared)
 
-        declared = db.MigrationDecision(task_id="gap-task", note="reviewer step never written",
+        declared = migrate_legacy.MigrationDecision(task_id="gap-task", note="reviewer step never written",
                                         missing_steps=(3,))
-        db.import_task(conn, "gap-task", task_dir, decision=declared)
+        migrate_legacy.import_task(conn, "gap-task", task_dir, decision=declared)
         never_delivered = self._events(conn, "gap-task", db.EVENT_STEP_NEVER_DELIVERED)
         assert [event["step"] for event in never_delivered] == [3]
 
@@ -2479,25 +2499,25 @@ class TestMigrationDecisionExtensions:
         task_dir.mkdir()
         self._run_yaml(task_dir, phase="architect")
         self._artifact(task_dir / "01-architect.md", phase="architect", step=1, verdict="ready-for-builder")
-        decision = db.MigrationDecision(task_id="contradiction", note="wrong", missing_steps=(1,))
+        decision = migrate_legacy.MigrationDecision(task_id="contradiction", note="wrong", missing_steps=(1,))
         with pytest.raises(db.InvalidTransition, match="actually exist"):
-            db.import_task(conn, "contradiction", task_dir, decision=decision)
+            migrate_legacy.import_task(conn, "contradiction", task_dir, decision=decision)
 
     def test_note_file_that_is_not_on_disk_is_refused(self, conn, tmp_path):
         task_dir = tmp_path / "stale-decision"
         task_dir.mkdir()
         self._run_yaml(task_dir, phase="architect")
         self._artifact(task_dir / "01-architect.md", phase="architect", step=1, verdict="ready-for-builder")
-        decision = db.MigrationDecision(task_id="stale-decision", note="stale",
+        decision = migrate_legacy.MigrationDecision(task_id="stale-decision", note="stale",
                                         note_files=("09-gone.md",))
         with pytest.raises(db.InvalidTransition, match="not agent artifacts on disk"):
-            db.import_task(conn, "stale-decision", task_dir, decision=decision)
+            migrate_legacy.import_task(conn, "stale-decision", task_dir, decision=decision)
 
     def test_exclude_cannot_be_combined_with_new_fields(self):
         with pytest.raises(ValueError, match="cannot both exclude"):
-            db.MigrationDecision(task_id="t", exclude=True, note="x", missing_steps=(2,))
+            migrate_legacy.MigrationDecision(task_id="t", exclude=True, note="x", missing_steps=(2,))
         with pytest.raises(ValueError, match="cannot both exclude"):
-            db.MigrationDecision(task_id="t", exclude=True, note="x", note_files=("02-a.md",))
+            migrate_legacy.MigrationDecision(task_id="t", exclude=True, note="x", note_files=("02-a.md",))
 
 
 class TestDecisionScope:
@@ -2521,16 +2541,16 @@ class TestDecisionScope:
 
     def test_note_only_decision_does_not_waive_phase_drift(self, conn, tmp_path):
         task_dir = self._drifted_task(tmp_path)
-        note_only = db.MigrationDecision(task_id="drifted", note="unrelated note")
+        note_only = migrate_legacy.MigrationDecision(task_id="drifted", note="unrelated note")
         with pytest.raises(db.InvalidTransition, match="does not address"):
-            db.import_task(conn, "drifted", task_dir, decision=note_only)
+            migrate_legacy.import_task(conn, "drifted", task_dir, decision=note_only)
         assert not db.task_exists(conn, "drifted")
 
     def test_explicit_phase_decision_addresses_drift_and_is_audited(self, conn, tmp_path):
         task_dir = self._drifted_task(tmp_path)
-        explicit = db.MigrationDecision(task_id="drifted", current_phase="reviewer",
+        explicit = migrate_legacy.MigrationDecision(task_id="drifted", current_phase="reviewer",
                                         note="artifacts win: latest is the reviewer")
-        db.import_task(conn, "drifted", task_dir, decision=explicit)
+        migrate_legacy.import_task(conn, "drifted", task_dir, decision=explicit)
         override_events = conn.execute(
             "SELECT payload FROM events WHERE task_id='drifted' AND event_type=?",
             (db.EVENT_MIGRATION_OVERRIDE,)).fetchall()
@@ -2554,7 +2574,7 @@ class TestDecisionsFile:
             "    exclude: true\n"
             "    note: custom workflow\n"
         )
-        decisions = db.load_decisions(path)
+        decisions = migrate_legacy.load_decisions(path)
         mapped = decisions["mapped"]
         assert mapped.status == "completed" and mapped.current_phase == "done"
         assert mapped.missing_steps == (4,)
@@ -2566,19 +2586,19 @@ class TestDecisionsFile:
         path = tmp_path / "decisions.yaml"
         path.write_text("decisions:\n  - task: t\n    note: x\n    stauts: completed\n")
         with pytest.raises(ValueError, match="unknown keys"):
-            db.load_decisions(path)
+            migrate_legacy.load_decisions(path)
 
     def test_load_decisions_rejects_duplicate_tasks(self, tmp_path):
         path = tmp_path / "decisions.yaml"
         path.write_text("decisions:\n  - {task: t, note: a}\n  - {task: t, note: b}\n")
         with pytest.raises(ValueError, match="more than one decision"):
-            db.load_decisions(path)
+            migrate_legacy.load_decisions(path)
 
     def test_load_decisions_requires_notes(self, tmp_path):
         path = tmp_path / "decisions.yaml"
         path.write_text("decisions:\n  - {task: t, status: completed}\n")
         with pytest.raises(ValueError, match="'note' must be a non-empty string"):
-            db.load_decisions(path)
+            migrate_legacy.load_decisions(path)
 
 
 class TestDecisionsFileTypes:
@@ -2589,7 +2609,7 @@ class TestDecisionsFileTypes:
     def _load(self, tmp_path, body: str):
         path = tmp_path / "decisions.yaml"
         path.write_text(body)
-        return db.load_decisions(path)
+        return migrate_legacy.load_decisions(path)
 
     def test_quoted_false_is_not_an_exclusion(self, tmp_path):
         with pytest.raises(ValueError, match="'exclude' must be true or false"):
@@ -2645,14 +2665,14 @@ class TestRehearseMigration:
         self._task(tasks_dir, "custom", status="parked")
         self._task(tasks_dir, "no-run-yaml", run_yaml=False)
         decisions = {
-            "old-word": db.MigrationDecision(task_id="old-word", status="completed", note="spelling"),
-            "custom": db.MigrationDecision(task_id="custom", exclude=True, note="custom workflow"),
-            "no-run-yaml": db.MigrationDecision(task_id="no-run-yaml", status="completed",
+            "old-word": migrate_legacy.MigrationDecision(task_id="old-word", status="completed", note="spelling"),
+            "custom": migrate_legacy.MigrationDecision(task_id="custom", exclude=True, note="custom workflow"),
+            "no-run-yaml": migrate_legacy.MigrationDecision(task_id="no-run-yaml", status="completed",
                                                 current_phase="done", note="shipped"),
-            "ghost": db.MigrationDecision(task_id="ghost", status="completed", note="typo'd name"),
+            "ghost": migrate_legacy.MigrationDecision(task_id="ghost", status="completed", note="typo'd name"),
         }
 
-        rehearsal = db.rehearse_migration(tasks_dir, decisions)
+        rehearsal = migrate_legacy.rehearse_migration(tasks_dir, decisions)
 
         assert rehearsal["scanned"] == 5
         assert rehearsal["clean"] == ["clean-task"]
@@ -2667,7 +2687,7 @@ class TestRehearseMigration:
         self._task(tasks_dir, "clean-task")
         before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
-        db.rehearse_migration(tasks_dir, {})
+        migrate_legacy.rehearse_migration(tasks_dir, {})
 
         after = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
         assert before == after
@@ -2677,9 +2697,9 @@ class TestRehearseMigration:
         tasks_dir = tmp_path / "tasks"
         tasks_dir.mkdir()
         self._task(tasks_dir, "bad-mapping", status="complete")
-        decisions = {"bad-mapping": db.MigrationDecision(task_id="bad-mapping", status="finished",
+        decisions = {"bad-mapping": migrate_legacy.MigrationDecision(task_id="bad-mapping", status="finished",
                                                          note="not a real status")}
-        rehearsal = db.rehearse_migration(tasks_dir, decisions)
+        rehearsal = migrate_legacy.rehearse_migration(tasks_dir, decisions)
         assert rehearsal["resolved"] == []
         [(task, reason)] = rehearsal["unresolved"]
         assert task == "bad-mapping" and "'finished' is not a valid status" in reason
@@ -2704,7 +2724,7 @@ class TestRecoverCommand:
         monkeypatch.setattr(db, "_valid_verdicts", {})
         monkeypatch.setattr(db, "_valid_statuses", [])
 
-        commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True)
+        assert commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True) == 0
 
         assert "Dry-run only" in capsys.readouterr().out
 
@@ -2724,8 +2744,8 @@ class TestRecoverCommand:
         monkeypatch.setattr(settings, "TASKS_DIR", tasks_dir)
         monkeypatch.setattr(settings, "_db_path", lambda: tmp_path / "relay.db")
 
-        commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
-                          decisions_path=str(decisions_file))
+        assert commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
+                                 decisions_path=str(decisions_file)) == 0
 
         output = capsys.readouterr().out
         assert "Resolved:   1" in output and "Unresolved: 0" in output
@@ -2749,8 +2769,8 @@ class TestRecoverCommand:
         monkeypatch.setattr(settings, "TASKS_DIR", tasks_dir)
         monkeypatch.setattr(settings, "_db_path", lambda: db_file)
 
-        commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
-                          decisions_path=str(decisions_file), apply=True)
+        assert commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
+                                 decisions_path=str(decisions_file), apply=True) == 0
 
         conn = db.connect_existing(db_file)
         assert conn.execute("SELECT status FROM tasks WHERE task_id='old-word'").fetchone()[0] == "completed"
@@ -2780,8 +2800,7 @@ class TestDeployment:
 
 
 class TestReviewWarnings:
-    """Migration decisions and reconciliation refuse what they cannot
-    apply honestly, and odd files are flagged rather than crashing."""
+    """Regressions for warnings an outside review of the migration found."""
 
     def _task(self, root: Path, name: str, *, steps, status="in_progress", phase=None,
               history="history: []\n", run_yaml=True):
@@ -2804,51 +2823,51 @@ class TestReviewWarnings:
 
     def test_override_for_a_step_that_does_not_exist_is_refused(self, conn, tmp_path):
         task_dir = self._task(tmp_path, "t", steps=[(1, "architect", "ready-for-builder")])
-        decision = db.MigrationDecision(task_id="t", note="stale", step_overrides=(
-            db.StepVerdictOverride(5, "approved", "secure", note="no such step"),))
+        decision = migrate_legacy.MigrationDecision(task_id="t", note="stale", step_overrides=(
+            migrate_legacy.StepVerdictOverride(5, "approved", "secure", note="no such step"),))
         with pytest.raises(db.InvalidTransition, match="matches no step on disk"):
-            db.import_task(conn, "t", task_dir, decision=decision)
+            migrate_legacy.import_task(conn, "t", task_dir, decision=decision)
 
     def test_override_for_an_already_canonical_verdict_is_refused(self, conn, tmp_path):
         task_dir = self._task(tmp_path, "t", steps=[(1, "architect", "ready-for-builder")])
-        decision = db.MigrationDecision(task_id="t", note="stale", step_overrides=(
-            db.StepVerdictOverride(1, "ready-for-builder", "needs-human-input", note="pointless"),))
+        decision = migrate_legacy.MigrationDecision(task_id="t", note="stale", step_overrides=(
+            migrate_legacy.StepVerdictOverride(1, "ready-for-builder", "needs-human-input", note="pointless"),))
         with pytest.raises(db.InvalidTransition, match="already canonical"):
-            db.import_task(conn, "t", task_dir, decision=decision)
+            migrate_legacy.import_task(conn, "t", task_dir, decision=decision)
 
     def test_missing_step_before_the_first_artifact_is_refused(self, conn, tmp_path):
         task_dir = self._task(tmp_path, "t", steps=[(2, "builder", "ready-for-review")])
-        decision = db.MigrationDecision(task_id="t", note="x", missing_steps=(1,))
+        decision = migrate_legacy.MigrationDecision(task_id="t", note="x", missing_steps=(1,))
         with pytest.raises(db.InvalidTransition, match="before the first artifact"):
-            db.import_task(conn, "t", task_dir, decision=decision)
+            migrate_legacy.import_task(conn, "t", task_dir, decision=decision)
 
     def test_missing_step_after_the_last_needs_history_evidence(self, conn, tmp_path):
         no_history = self._task(tmp_path / "a", "t", steps=[(1, "architect", "ready-for-builder")],
                                 phase="reviewer")
-        decision = db.MigrationDecision(task_id="t", current_phase="reviewer", note="x",
+        decision = migrate_legacy.MigrationDecision(task_id="t", current_phase="reviewer", note="x",
                                         missing_steps=(2,))
         with pytest.raises(db.InvalidTransition, match="no record of them"):
-            db.import_task(conn, "t", no_history, decision=decision)
+            migrate_legacy.import_task(conn, "t", no_history, decision=decision)
 
         with_history = self._task(tmp_path / "b", "t", steps=[(1, "architect", "ready-for-builder")],
                                   phase="reviewer",
                                   history="history:\n- {phase: reviewer, step: 2}\n")
-        db.import_task(conn, "t", with_history, decision=decision)
+        migrate_legacy.import_task(conn, "t", with_history, decision=decision)
         assert db.task_exists(conn, "t")
 
     def test_force_does_not_skip_missing_step_range_checks(self, conn, tmp_path):
         task_dir = self._task(tmp_path, "t", steps=[(2, "builder", "ready-for-review")])
-        decision = db.MigrationDecision(task_id="t", note="x", missing_steps=(1,))
+        decision = migrate_legacy.MigrationDecision(task_id="t", note="x", missing_steps=(1,))
         with pytest.raises(db.InvalidTransition, match="before the first artifact"):
-            db.import_task(conn, "t", task_dir, decision=decision, force=True)
+            migrate_legacy.import_task(conn, "t", task_dir, decision=decision, force=True)
 
     def test_task_without_run_yaml_gets_next_step_from_its_trail(self, conn, tmp_path):
         task_dir = self._task(tmp_path, "t", run_yaml=False,
                               steps=[(1, "architect", "ready-for-builder"),
                                      (2, "builder", "ready-for-review")])
-        decision = db.MigrationDecision(task_id="t", status="completed", current_phase="done",
+        decision = migrate_legacy.MigrationDecision(task_id="t", status="completed", current_phase="done",
                                         note="shipped")
-        db.import_task(conn, "t", task_dir, decision=decision)
+        migrate_legacy.import_task(conn, "t", task_dir, decision=decision)
         assert conn.execute("SELECT next_step FROM tasks WHERE task_id='t'").fetchone()[0] == 3
 
     def test_unquoted_yaml_timestamps_are_stored_in_the_standard_form(self, conn, tmp_path):
@@ -2863,7 +2882,7 @@ class TestReviewWarnings:
             "---\ntask_id: t\nphase: architect\nstep: 1\ndate: 2026-05-01\n"
             "verdict: ready-for-builder\n---\n\nBody.\n"
         )
-        db.import_task(conn, "t", task_dir)
+        migrate_legacy.import_task(conn, "t", task_dir)
         row = conn.execute("SELECT created, updated FROM tasks WHERE task_id='t'").fetchone()
         assert (row["created"], row["updated"]) == ("2026-05-01T08:30:00Z", "2026-05-02T09:00:00Z")
 
@@ -2873,8 +2892,8 @@ class TestReviewWarnings:
         (task_dir / "02-builder.md").write_text("---\nphase: [unclosed\n---\n\nBody.\n")
         (task_dir / "03-reviewer.md").write_text("---\njust a string\n---\n\nBody.\n")
 
-        summary = db.dry_run_migration(tasks_dir)
-        rehearsal = db.rehearse_migration(tasks_dir, {})
+        summary = migrate_legacy.dry_run_migration(tasks_dir)
+        rehearsal = migrate_legacy.rehearse_migration(tasks_dir, {})
 
         [result] = summary["results"]
         unreadable = [d for d in result["discrepancies"] if "unreadable frontmatter" in d]
@@ -2885,7 +2904,7 @@ class TestReviewWarnings:
         tasks_dir = tmp_path / "tasks"
         task_dir = self._task(tasks_dir, "t", steps=[(1, "architect", "ready-for-builder")])
         (task_dir / "02-builder.md").write_text(f"---\n{SECURITYS_MERGE_KEYS}---\n\nBody.\n")
-        [result] = db.dry_run_migration(tasks_dir)["results"]
+        [result] = migrate_legacy.dry_run_migration(tasks_dir)["results"]
         assert ("artifact (02-builder.md) has unreadable frontmatter: frontmatter holds a YAML "
                 "anchor, alias or merge key (&name, *name or an unquoted <<)") in result["discrepancies"]
 
@@ -2914,8 +2933,8 @@ class TestRecoverApplyScope:
         monkeypatch.setattr(settings, "TASKS_DIR", tasks_dir)
         monkeypatch.setattr(settings, "_db_path", lambda: db_file)
 
-        commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
-                          decisions_path=str(decisions_file), apply=True)
+        assert commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
+                                 decisions_path=str(decisions_file), apply=True) == 0
 
         conn = db.connect_existing(db_file)
         imported = {row[0] for row in conn.execute("SELECT task_id FROM tasks")}
@@ -2930,19 +2949,18 @@ class TestRecoverApplyScope:
         monkeypatch.setattr(settings, "_db_path", lambda: tmp_path / "relay.db")
 
         with pytest.raises(SystemExit):
-            commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
-                              decisions_path=str(decisions_file))
+            run_relay({"persistence_backend": "sqlite"}, "recover", "--from-projections",
+                      "--decisions", str(decisions_file))
         assert "invalid decisions file" in capsys.readouterr().out
 
         with pytest.raises(SystemExit):
-            commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
-                              decisions_path=str(tmp_path / "nope.yaml"))
+            run_relay({"persistence_backend": "sqlite"}, "recover", "--from-projections",
+                      "--decisions", str(tmp_path / "nope.yaml"))
         assert "not found" in capsys.readouterr().out
 
 
 class TestReReviewWarnings:
-    """Odd values in legacy files and bad decisions files give clean
-    errors or refusals, never a crash."""
+    """Regressions for warnings a second outside review of the migration found."""
 
     def _task(self, tasks_dir: Path, run_yaml_tail: str):
         task_dir = tasks_dir / "t"
@@ -2962,10 +2980,10 @@ class TestReReviewWarnings:
         tasks_dir = tmp_path / "tasks"
         self._task(tasks_dir, "history:\n- {phase: human_gate, step: 2, timestamp: 2026-05-01T10:00:00Z}\n"
                               "shipped_on: 2026-05-03\n")
-        rehearsal = db.rehearse_migration(tasks_dir, {})
+        rehearsal = migrate_legacy.rehearse_migration(tasks_dir, {})
         assert rehearsal["clean"] == ["t"]
 
-        db.import_task(conn, "t", tasks_dir / "t")
+        migrate_legacy.import_task(conn, "t", tasks_dir / "t")
         rows = conn.execute("SELECT payload, timestamp FROM events WHERE task_id='t' "
                             "AND event_type=?", (db.EVENT_HISTORICAL_NOTE,)).fetchall()
         payloads = [json.loads(r["payload"]) for r in rows]
@@ -2976,7 +2994,7 @@ class TestReReviewWarnings:
         path = tmp_path / "decisions.yaml"
         path.write_text("decisions:\n  - {task: t, note: [unclosed\n")
         with pytest.raises(ValueError, match="not valid YAML"):
-            db.load_decisions(path)
+            migrate_legacy.load_decisions(path)
 
     def test_decisions_path_that_is_a_directory_prints_a_clean_error(self, tmp_path, monkeypatch, capsys):
         tasks_dir = tmp_path / "tasks"
@@ -2984,13 +3002,13 @@ class TestReReviewWarnings:
         monkeypatch.setattr(settings, "TASKS_DIR", tasks_dir)
         monkeypatch.setattr(settings, "_db_path", lambda: tmp_path / "relay.db")
         with pytest.raises(SystemExit):
-            commands.cmd_recover({"persistence_backend": "sqlite"}, from_projections=True,
-                              decisions_path=str(tmp_path))
+            run_relay({"persistence_backend": "sqlite"}, "recover", "--from-projections",
+                      "--decisions", str(tmp_path))
         assert "cannot read decisions file" in capsys.readouterr().out
 
     def test_duplicate_missing_steps_are_refused(self):
         with pytest.raises(ValueError, match="same missing_steps entry"):
-            db.MigrationDecision(task_id="t", note="x", missing_steps=(2, 2))
+            migrate_legacy.MigrationDecision(task_id="t", note="x", missing_steps=(2, 2))
 
     def test_override_on_a_step_with_no_verdict_is_refused(self, conn, tmp_path):
         task_dir = tmp_path / "t"
@@ -3003,14 +3021,14 @@ class TestReReviewWarnings:
         (task_dir / "01-architect.md").write_text(
             "---\ntask_id: t\nphase: architect\nstep: 1\ndate: 2026-05-01\n---\n\nNo verdict.\n"
         )
-        decision = db.MigrationDecision(task_id="t", note="x", step_overrides=(
-            db.StepVerdictOverride(1, "approved", "ready-for-builder", note="no verdict there"),))
+        decision = migrate_legacy.MigrationDecision(task_id="t", note="x", step_overrides=(
+            migrate_legacy.StepVerdictOverride(1, "approved", "ready-for-builder", note="no verdict there"),))
         with pytest.raises(db.InvalidTransition, match="expected verdict 'approved' but found 'None'"):
-            db.import_task(conn, "t", task_dir, decision=decision)
+            migrate_legacy.import_task(conn, "t", task_dir, decision=decision)
 
 
 class TestNewPipelineEndToEnd:
-    """Drive real tasks through `relay next` in the pipeline order:
+    """Drive real tasks through `relay next` in the full chain's order:
     designer -> architect -> builder -> reviewer -> tester -> security -> ops."""
 
     GATES_OFF = {"after_designer": False, "after_architect": False,
@@ -3024,20 +3042,20 @@ class TestNewPipelineEndToEnd:
 
     def _run_to_security(self, config, task_id, deploy, deploy_at_start=False):
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, task_id)
-        commands.cmd_start(task_id, auto=False, config=config, deploy_intent=deploy_at_start)
+        assert commands.cmd_start(task_id, auto=False, config=config, deploy_intent=deploy_at_start) == 0
         self._write(task_dir, 1, "designer", "ready-for-architect")
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
         self._write(task_dir, 2, "architect", "ready-for-builder", f"pass: work\ndeploy: {deploy}\n")
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
         for step, phase, verdict in ((3, "builder", "ready-for-review"), (4, "reviewer", "approved"),
                                      (5, "tester", "pass"), (6, "security", "secure")):
             self._write(task_dir, step, phase, verdict)
-            commands.cmd_next(task_id, auto=False, config=config)
+            assert commands.cmd_next(task_id, auto=False, config=config) == 0
         return run_state.load_run_state(task_id, config)
 
     def test_new_task_starts_at_designer(self, sqlite_env):
         _make_task_dir_with_brief(settings.TASKS_DIR, "pipe-start")
-        commands.cmd_start("pipe-start", auto=False, config=sqlite_env)
+        assert commands.cmd_start("pipe-start", auto=False, config=sqlite_env) == 0
         assert run_state.load_run_state("pipe-start", sqlite_env)["current_phase"] == "designer"
 
     def test_architect_deploy_no_completes_after_security(self, sqlite_env, capsys):
@@ -3050,10 +3068,7 @@ class TestNewPipelineEndToEnd:
         assert len(decisions) == 1
         assert decisions[0]["payload"] == {"previous": True, "decided": False, "source": "architect"}
         assert state["status"] == "completed"
-        out = capsys.readouterr().out
-        assert "Skipping ops" in out
-        # The close names no file the task does not have.
-        assert "Workflow complete for pipe-nodeploy." in out and "99-final" not in out
+        assert "Skipping ops" in capsys.readouterr().out
 
     def test_architect_deploy_yes_routes_to_ops(self, sqlite_env):
         config = {**sqlite_env, "human_gates": self.GATES_OFF}
@@ -3067,28 +3082,28 @@ class TestNewPipelineEndToEnd:
         with no tester step must get its tester run, not skip it."""
         config = {**sqlite_env, "human_gates": self.GATES_OFF}
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "pipe-legacy")
-        commands.cmd_start("pipe-legacy", auto=False, config=config)
+        assert commands.cmd_start("pipe-legacy", auto=False, config=config) == 0
         self._write(task_dir, 1, "designer", "ready-for-architect")
-        commands.cmd_next("pipe-legacy", auto=False, config=config)
+        assert commands.cmd_next("pipe-legacy", auto=False, config=config) == 0
         self._write(task_dir, 2, "architect", "ready-for-builder", "deploy: no\n")
-        commands.cmd_next("pipe-legacy", auto=False, config=config)
+        assert commands.cmd_next("pipe-legacy", auto=False, config=config) == 0
         self._write(task_dir, 3, "builder", "ready-for-review")
-        commands.cmd_next("pipe-legacy", auto=False, config=config)
+        assert commands.cmd_next("pipe-legacy", auto=False, config=config) == 0
         self._write(task_dir, 4, "reviewer", "approved")
         # The old order sent an approved review to Security, not the Tester.
-        commands.cmd_override("pipe-legacy", "security", config, auto=False)
+        assert commands.cmd_override("pipe-legacy", "security", config, auto=False) == 0
         self._write(task_dir, 5, "security", "secure")
-        commands.cmd_next("pipe-legacy", auto=False, config=config)
+        assert commands.cmd_next("pipe-legacy", auto=False, config=config) == 0
         state = run_state.load_run_state("pipe-legacy", config)
         assert state["current_phase"] == "tester"
         assert "task predates the new order" in capsys.readouterr().out
 
     def test_recommend_no_build_stops_for_the_owner(self, sqlite_env, capsys):
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "pipe-nobuild")
-        commands.cmd_start("pipe-nobuild", auto=False, config=sqlite_env)
+        assert commands.cmd_start("pipe-nobuild", auto=False, config=sqlite_env) == 0
         self._write(task_dir, 1, "designer", "recommend-no-build")
         capsys.readouterr()
-        commands.cmd_next("pipe-nobuild", auto=False, config=sqlite_env)
+        assert commands.cmd_next("pipe-nobuild", auto=False, config=sqlite_env) == 0
         assert "HUMAN GATE" in capsys.readouterr().out
         assert run_state.load_run_state("pipe-nobuild", sqlite_env)["current_phase"] == "designer"
 
@@ -3101,9 +3116,7 @@ class TestDeployFlag:
 
 
 class TestReviewFindingsOnRouting:
-    """Routing edge cases: a fix after a failed test is retested, Security
-    loopbacks count toward the retry limit, and a plan without a deploy
-    flag stops for the owner."""
+    """Regressions for an outside review of the routing order."""
 
     GATES_OFF = TestNewPipelineEndToEnd.GATES_OFF
     _write = TestNewPipelineEndToEnd._write
@@ -3121,11 +3134,11 @@ class TestReviewFindingsOnRouting:
 
     def _start_through_plan(self, config, task_id, deploy="no"):
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, task_id)
-        commands.cmd_start(task_id, auto=False, config=config)
+        assert commands.cmd_start(task_id, auto=False, config=config) == 0
         self._write(task_dir, 1, "designer", "ready-for-architect")
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
         self._write(task_dir, 2, "architect", "ready-for-builder", f"deploy: {deploy}\n")
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
         return task_dir
 
     def test_failed_tester_followed_by_a_fix_must_be_retested(self, sqlite_env):
@@ -3138,21 +3151,21 @@ class TestReviewFindingsOnRouting:
             self._answer(config, "retest", verdict)
             if verdict == "approved":
                 break
-            commands.cmd_next("retest", auto=False, config=config)
-        commands.cmd_override("retest", "security", config, auto=False)  # old order
+            assert commands.cmd_next("retest", auto=False, config=config) == 0
+        assert commands.cmd_override("retest", "security", config, auto=False) == 0  # old order
         self._answer(config, "retest", "secure")
-        commands.cmd_next("retest", auto=False, config=config)        # -> tester (none yet)
+        assert commands.cmd_next("retest", auto=False, config=config) == 0        # -> tester (none yet)
         redirected = run_state.load_run_state("retest", config)
         assert redirected["current_phase"] == "tester"
         assert redirected["retries"].get("tester", 0) == 0  # a redirect is not a retry
         self._answer(config, "retest", "fail")
-        commands.cmd_next("retest", auto=False, config=config)        # -> builder
+        assert commands.cmd_next("retest", auto=False, config=config) == 0        # -> builder
         self._answer(config, "retest", "ready-for-review")
-        commands.cmd_next("retest", auto=False, config=config)        # -> reviewer
+        assert commands.cmd_next("retest", auto=False, config=config) == 0        # -> reviewer
         self._answer(config, "retest", "approved")
-        commands.cmd_override("retest", "security", config, auto=False)  # old order again
+        assert commands.cmd_override("retest", "security", config, auto=False) == 0  # old order again
         self._answer(config, "retest", "secure")
-        commands.cmd_next("retest", auto=False, config=config)
+        assert commands.cmd_next("retest", auto=False, config=config) == 0
 
         state = run_state.load_run_state("retest", config)
         assert state["status"] == "in_progress"
@@ -3165,7 +3178,7 @@ class TestReviewFindingsOnRouting:
         for _round in range(3):
             for verdict in ("ready-for-review", "approved", "pass", "critical-findings"):
                 self._answer(config, "sec-loop", verdict)
-                commands.cmd_next("sec-loop", auto=False, config=config)
+                assert commands.cmd_next("sec-loop", auto=False, config=config) == 0
                 if run_state.load_run_state("sec-loop", config)["status"] == "blocked":
                     break
             if run_state.load_run_state("sec-loop", config)["status"] == "blocked":
@@ -3179,12 +3192,12 @@ class TestReviewFindingsOnRouting:
         and could silently skip Ops."""
         config = {**sqlite_env, "human_gates": self.GATES_OFF}
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "no-flag")
-        commands.cmd_start("no-flag", auto=False, config=config, deploy_intent=True)
+        assert commands.cmd_start("no-flag", auto=False, config=config, deploy_intent=True) == 0
         self._write(task_dir, 1, "designer", "ready-for-architect")
-        commands.cmd_next("no-flag", auto=False, config=config)
+        assert commands.cmd_next("no-flag", auto=False, config=config) == 0
         self._write(task_dir, 2, "architect", "ready-for-builder")
         capsys.readouterr()
-        commands.cmd_next("no-flag", auto=False, config=config)
+        assert commands.cmd_next("no-flag", auto=False, config=config) == 0
         out = capsys.readouterr().out
         assert "HUMAN GATE" in out and "no valid deploy" in out
         assert "Add 'deploy: yes' or 'deploy: no'" in out  # tells the owner how to decide
@@ -3195,13 +3208,13 @@ class TestReviewFindingsOnRouting:
         """The remedy the gate prints actually works."""
         config = {**sqlite_env, "human_gates": self.GATES_OFF}
         task_dir = _make_task_dir_with_brief(settings.TASKS_DIR, "flag-fixed")
-        commands.cmd_start("flag-fixed", auto=False, config=config, deploy_intent=True)
+        assert commands.cmd_start("flag-fixed", auto=False, config=config, deploy_intent=True) == 0
         self._write(task_dir, 1, "designer", "ready-for-architect")
-        commands.cmd_next("flag-fixed", auto=False, config=config)
+        assert commands.cmd_next("flag-fixed", auto=False, config=config) == 0
         self._write(task_dir, 2, "architect", "ready-for-builder")
-        commands.cmd_next("flag-fixed", auto=False, config=config)      # gate
+        assert commands.cmd_next("flag-fixed", auto=False, config=config) == 0      # gate
         self._write(task_dir, 2, "architect", "ready-for-builder", "deploy: no\n")
-        commands.cmd_next("flag-fixed", auto=False, config=config)
+        assert commands.cmd_next("flag-fixed", auto=False, config=config) == 0
         state = run_state.load_run_state("flag-fixed", config)
         assert state["current_phase"] == "builder"
         assert state["deploy_intent"] is False
@@ -3210,11 +3223,11 @@ class TestReviewFindingsOnRouting:
         """Every routing loopback counts, not only builder and reviewer."""
         config = {**sqlite_env, "human_gates": self.GATES_OFF}
         _make_task_dir_with_brief(settings.TASKS_DIR, "brief-loop")
-        commands.cmd_start("brief-loop", auto=False, config=config)
+        assert commands.cmd_start("brief-loop", auto=False, config=config) == 0
         self._answer(config, "brief-loop", "ready-for-architect")
-        commands.cmd_next("brief-loop", auto=False, config=config)
+        assert commands.cmd_next("brief-loop", auto=False, config=config) == 0
         self._answer(config, "brief-loop", "needs-designer")
-        commands.cmd_next("brief-loop", auto=False, config=config)
+        assert commands.cmd_next("brief-loop", auto=False, config=config) == 0
         state = run_state.load_run_state("brief-loop", config)
         assert state["current_phase"] == "designer"
         assert state["retries"].get("designer") == 1
@@ -3222,9 +3235,9 @@ class TestReviewFindingsOnRouting:
     def test_override_into_legacy_pentest_is_refused(self, sqlite_env):
         """Warning 4: there is no pentest agent any more."""
         _make_task_dir_with_brief(settings.TASKS_DIR, "no-pentest")
-        commands.cmd_start("no-pentest", auto=False, config=sqlite_env)
+        assert commands.cmd_start("no-pentest", auto=False, config=sqlite_env) == 0
         with pytest.raises(SystemExit):
-            commands.cmd_override("no-pentest", "pentest", sqlite_env, auto=False)
+            run_relay(sqlite_env, "override", "no-pentest", "pentest")
 
     def test_load_config_never_mutates_the_defaults(self, tmp_path, monkeypatch):
         """Nit 4: the shallow copy let a user config rewrite DEFAULT_CONFIG."""

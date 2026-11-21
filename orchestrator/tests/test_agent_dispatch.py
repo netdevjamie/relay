@@ -9,7 +9,6 @@ that the role did not start or did not finish.
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -19,10 +18,12 @@ import agents
 import awake
 import commands
 import settings
+from tests.cli_edge import run_relay
 from tests.test_send_back import UP_TO_REVIEW, config, finish_step, task_at  # noqa: F401
 
 AGENTS_DIR = Path(__file__).resolve().parents[2] / "agents"
-DISPATCHABLE_PHASES = settings.PIPELINE_ORDER
+# The pipeline's roles, and the Arbiter, which Relay calls (settings.ARBITER).
+DISPATCHABLE_PHASES = settings.PIPELINE_ORDER + [settings.ARBITER]
 TASK = "dispatched"
 NO_CONFIG: dict = {}
 
@@ -38,14 +39,14 @@ def role_file_name(phase: str) -> str:
 
 
 def record_commands(monkeypatch, returncode: int = 0) -> list:
-    """Replace subprocess.run in agents.py with a recorder. Every call
-    returns `returncode`; nothing is run."""
+    """Replace agents.run_role, the one place a role is started, with a
+    recorder. Every call returns `returncode`; nothing is run."""
     ran = []
 
     def recorder(command, *args, **kwargs):
         ran.append(command)
-        return SimpleNamespace(returncode=returncode, stdout="", stderr="")
-    monkeypatch.setattr(agents.subprocess, "run", recorder)
+        return agents.RoleRun(returncode=returncode, timed_out=False, ran_seconds=0)
+    monkeypatch.setattr(agents, "run_role", recorder)
     return ran
 
 
@@ -88,9 +89,7 @@ def test_auto_dispatch_passes_the_role_files_name(phase, monkeypatch):
 
 def test_a_non_zero_exit_stops_relay_and_says_the_role_did_not_start(monkeypatch, capsys):
     record_commands(monkeypatch, returncode=1)
-    with pytest.raises(SystemExit) as stopped:
-        agents.invoke_agent("tester", TASK, "the prompt", NO_CONFIG, auto=True)
-    assert stopped.value.code == 1
+    assert agents.invoke_agent("tester", TASK, "the prompt", NO_CONFIG, auto=True) == 1
     out = capsys.readouterr().out
     assert "The Tester role did not start or did not finish: claude exited with code 1." in out
     assert "Relay stopped here" in out
@@ -98,17 +97,14 @@ def test_a_non_zero_exit_stops_relay_and_says_the_role_did_not_start(monkeypatch
 
 def test_a_non_zero_exit_names_the_command_that_dispatches_the_phase_again(monkeypatch, capsys):
     record_commands(monkeypatch, returncode=2)
-    with pytest.raises(SystemExit):
-        agents.invoke_agent("reviewer", TASK, "the prompt", NO_CONFIG, auto=True)
+    assert agents.invoke_agent("reviewer", TASK, "the prompt", NO_CONFIG, auto=True) == 1
     assert f"{settings._CLI_CMD} override {TASK} reviewer --auto" in capsys.readouterr().out
 
 
 def test_a_phase_with_no_role_file_is_refused_under_auto_before_claude_runs(
         monkeypatch, capsys, no_real_keep_awake):
     ran = record_commands(monkeypatch)
-    with pytest.raises(SystemExit) as stopped:
-        agents.invoke_agent("pentest", TASK, "the prompt", NO_CONFIG, auto=True)
-    assert stopped.value.code == 1
+    assert agents.invoke_agent("pentest", TASK, "the prompt", NO_CONFIG, auto=True) == 1
     assert ran == []
     assert no_real_keep_awake == []
     assert "Nothing was started." in capsys.readouterr().out
@@ -118,11 +114,11 @@ def test_a_phase_with_no_role_file_is_refused_under_auto_before_claude_runs(
 # What stays as at main
 # ---------------------------------------------------------------------------
 
-def test_manual_mode_asks_for_the_role_by_its_name(monkeypatch, capsys):
+def test_manual_mode_still_prints_the_phase(monkeypatch, capsys):
     ran = record_commands(monkeypatch)
     agents.invoke_agent("tester", TASK, "the prompt", NO_CONFIG, auto=False)
     assert ran == []
-    assert "Use the Tester subagent: the prompt" in capsys.readouterr().out
+    assert "@tester the prompt" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +130,8 @@ def test_override_dispatches_a_stopped_phase_again(config, monkeypatch):  # noqa
     finish_step(TASK, config, "ready-for-review")
     ran = record_commands(monkeypatch, returncode=1)
     with pytest.raises(SystemExit):
-        commands.cmd_next(TASK, auto=True, config=config)   # the Reviewer did not start
+        run_relay(config, "next", TASK, "--auto")   # the Reviewer did not start
     ran_again = record_commands(monkeypatch, returncode=0)
-    commands.cmd_override(TASK, "reviewer", config, auto=True)
+    assert commands.cmd_override(TASK, "reviewer", config, auto=True) == 0
     assert [agent_name_in(command) for command in claude_calls(ran + ran_again)] == [
         role_file_name("reviewer"), role_file_name("reviewer")]

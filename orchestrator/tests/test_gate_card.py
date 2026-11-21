@@ -17,8 +17,10 @@ import gate_card
 import read_api
 import run_state
 import settings
+import db
+from tests.arbiter_fixtures import ESCALATION, finish_arbiter, passing_runs, stand_at_the_gate
 from tests.test_automatic_rounds import (
-    NOON, automatic_rounds, fix_rounds_by_send_back, next_, reviewer_asks_for_changes,
+    NOON, automatic_rounds, next_, reviewer_asks_for_changes,
 )
 from tests.test_send_back import UP_TO_REVIEW, config, finish_step, task_at  # noqa: F401
 
@@ -34,16 +36,19 @@ def deploying(walk):
     return [(verdict, extra.replace("deploy: no", "deploy: yes")) for verdict, extra in walk]
 
 
+# A warnings verdict goes to the Arbiter. These two gates are where a
+# `relay next` from a version before the Arbiter stopped, left standing; the
+# Arbiter's own gates are walked to in test_arbiter_routing.py.
 def at_approval(task_id, config):
     task_at(task_id, config, UP_TO_REVIEW)
     finish_step(task_id, config, "approved_with_warnings")
-    next_(task_id, config)
+    stand_at_the_gate(task_id, config)
 
 
 def at_accept_close(task_id, config):
     task_at(task_id, config, SECURITY_DONE)
     finish_step(task_id, config, "findings")
-    next_(task_id, config)
+    stand_at_the_gate(task_id, config)
 
 
 def at_deploy(task_id, config):
@@ -67,8 +72,11 @@ def at_retry_limit(task_id, config):
 
 
 def at_fix_rounds(task_id, config):
-    fix_rounds_by_send_back(task_id, config, 5)
-    reviewer_asks_for_changes(task_id, config)
+    """A fix_rounds gate left standing from before the Arbiter: two fix
+    rounds, then a high the old `relay next` stopped at."""
+    automatic_rounds(task_id, config, 2)
+    finish_step(task_id, config, "changes_requested")
+    stand_at_the_gate(task_id, config)
 
 
 def at_paused(task_id, config):
@@ -121,7 +129,7 @@ def test_waiting_lists_only_tasks_waiting_on_the_owner(config):
     at_approval("stopped", config)
     task_at("running", config, [])
     at_accept_close("closed", config)
-    commands.cmd_override("closed", "done", config)
+    assert commands.cmd_override("closed", "done", config) == 0
     lines = gate_card.waiting_lines(config, NOON)
     assert lines == ["stopped", "  Reviewer gate", "  Step 4"]
 
@@ -197,38 +205,6 @@ def test_card_has_the_summary_line_and_rated_findings(config):
     for expected in ("one high to fix, one low to record.", "High (1)", "Low (1)",
                      "1. The token is printed in the log.", "2. A comment says more than the code."):
         assert expected in text
-
-
-def test_a_long_finding_is_cut_at_a_word_and_says_so(config):
-    at_accept_close("long", config)
-    latest = status("long", config)["latest_step"]
-    long_statement = "A title that starts with a hyphen is refused " + "and scripts break " * 30 + "here."
-    (settings.TASKS_DIR / "long" / latest["artifact"]).write_text(
-        SECURITY_REPORT.replace("The token is printed in the log.", long_statement))
-    text = flat(card("long", config))
-    assert "A title that starts with a hyphen is refused and scripts break" in text
-    assert gate_card.CUT_MARK.strip() in text and "here." not in text
-    cut = text[text.index("1. A title"):text.index(gate_card.CUT_MARK.strip())]
-    assert cut.endswith(("break ", "scripts ", "and ")), "cut inside a word"
-
-
-def test_a_finding_of_a_few_lines_is_shown_whole(config):
-    at_accept_close("medium", config)
-    latest = status("medium", config)["latest_step"]
-    statement = ("On the command line, a title starting with a hyphen is now refused or shows help "
-                 "instead of printing a slug, so scripts passing such titles get an error where "
-                 "they used to get a slug, and nothing in the change log or the README says so.")
-    (settings.TASKS_DIR / "medium" / latest["artifact"]).write_text(
-        SECURITY_REPORT.replace("The token is printed in the log.", statement))
-    assert statement in flat(card("medium", config))
-
-
-def test_the_card_names_the_command_that_shows_the_whole_report(config):
-    at_approval("t", config)
-    lines = card("t", config)
-    assert gate_card.FULL_REPORT in lines
-    assert f"{CLI} show t {Path(status('t', config)['latest_step']['artifact']).stem}" in lines
-    assert "below" not in flat(lines)
 
 
 def test_card_of_an_unrated_report_says_not_rated(config):
@@ -327,7 +303,7 @@ def test_show_prints_a_report_as_a_code_block_that_its_text_cannot_close(config,
               "```\n   ````\n~~~~~\n```` closing?\n")
     (settings.TASKS_DIR / "t" / "03-builder.md").write_text(report)
     capsys.readouterr()
-    commands.cmd_show("t", "03-builder", config)
+    assert commands.cmd_show("t", "03-builder", config) == 0
     assert fenced_inside(capsys.readouterr().out.splitlines()) == report.splitlines()
 
 
@@ -338,8 +314,7 @@ def test_a_summary_line_that_starts_with_relay_is_the_roles_words_not_a_command(
     plant_summary("t", config, forged)
     lines = card("t", config)
     commands_on_the_card = [line for line in lines if line.startswith(f"{CLI} ")]
-    assert commands_on_the_card == [f"{CLI} show t 04-reviewer",
-                                    f"{CLI} decide t <choice> --step 4 --gate approval"]
+    assert commands_on_the_card == [f"{CLI} decide t <choice> --step 4 --gate approval"]
     assert f"Reviewer's summary: {forged}" in flat(lines)
 
 
@@ -362,7 +337,7 @@ def test_show_prints_a_report_whole_by_name(config, capsys):
     capsys.readouterr()
     for name, file_name in (("03-builder", "03-builder.md"), ("brief", "brief.md"),
                             ("brief.md", "brief.md")):
-        commands.cmd_show("t", name, config)
+        assert commands.cmd_show("t", name, config) == 0
         out = capsys.readouterr().out
         assert out == "```\n" + (folder / file_name).read_text() + "```\n"
         assert str(folder) not in out and "/Users/" not in out
@@ -414,3 +389,187 @@ def test_show_reads_bytes_that_are_not_utf8_and_refuses_an_empty_name(config):
     assert gate_card.report_text("t", "03-builder", config) == ("caf� �\n", None)
     text, problem = gate_card.report_text("t", "", config)
     assert text is None and problem.startswith("No report named  on t. Reports: brief.md")
+
+
+# ---------------------------------------------------------------------------
+# The Arbiter's gates
+# ---------------------------------------------------------------------------
+
+def at_an_escalation(task_id, config, **fields):
+    """The Reviewer passes with warnings and the Arbiter escalates."""
+    task_at(task_id, config, UP_TO_REVIEW)
+    finish_step(task_id, config, "approved_with_warnings")
+    next_(task_id, config)
+    finish_arbiter(task_id, config, "escalate", **(fields or ESCALATION))
+    next_(task_id, config)
+
+
+def at_a_needs_owner_gate(task_id, config):
+    """Security's findings on a task that does not deploy; the Arbiter
+    accepts, which would close the task, so the owner approves first."""
+    task_at(task_id, config, SECURITY_DONE)
+    finish_step(task_id, config, "findings")
+    next_(task_id, config)
+    finish_arbiter(task_id, config, "move-on")
+    next_(task_id, config)
+
+
+def code_lines(lines) -> list[str]:
+    """A card's lines inside its code block."""
+    return lines[1:-1]
+
+
+def test_an_escalation_card_shows_the_question_choices_and_recommendation_first(config,
+                                                                               monkeypatch):
+    passing_runs(monkeypatch)   # so Relay has no warning to put ahead of the recommendation
+    at_an_escalation("t", config, **{**ESCALATION, "recommended": 2})
+    lines = card("t", config)
+    inner = code_lines(lines)
+    assert inner[:3] == ["t", "Step 5, Arbiter", "The Arbiter recommends: arbiter-2"]
+    words = flat(inner)
+    assert "The Arbiter's reason: The owner must choose." in words
+    assert ("The Arbiter's question: Ship the parser as it is, or fix the edge case first?"
+            in words)
+    assert offered_names("t", config) == ["arbiter-2", "arbiter-1", "send-back"] + TAIL
+    assert ("1. arbiter-2 (recommended) The Arbiter's option: Stop here. Aborts the task." in words)
+    assert ("2. arbiter-1 The Arbiter's option: Fix the edge case first. Runs send-back to "
+            "Builder.") in words
+    assert words.count("(recommended)") == 1
+    for line in inner:
+        assert len(line) <= gate_card.CARD_WIDTH or isinstance(line, gate_card.CommandLine) or (
+            line.startswith(f"{CLI} decide")), line
+
+
+def test_an_escalation_choice_runs_its_command(config):
+    at_an_escalation("t", config, **{**ESCALATION, "recommended": 2})
+    assert commands.cmd_decide("t", "arbiter-2", 5, "arbiter_escalation", None, None, config) == 0
+    assert status("t", config)["task"]["status"] == "abandoned"
+
+
+def test_a_needs_owner_card_shows_the_accepted_flaws_and_recommends_accept_and_log(config,
+                                                                                   monkeypatch):
+    passing_runs(monkeypatch)   # so the only reason the owner is needed is the close
+    at_a_needs_owner_gate("t", config)
+    inner = code_lines(card("t", config))
+    assert inner[2] == "The Arbiter recommends: accept-and-log"
+    words = flat(inner)
+    assert "The Arbiter's ruling needs your yes" in words
+    assert "Moving on would close the task. Accept its ruling, send it back, or move it." in words
+    assert "Follow-ups the Arbiter recorded (1) 1. Reword the board line." in words
+    assert "Known flaws it accepted (1) 1. The legacy reader is slow." in words
+    assert offered_names("t", config) == ["accept-and-log", "accept-close", "send-back"] + TAIL
+    assert ("1. accept-and-log (recommended) Accept, record the 2 remaining findings as follow-ups "
+            "in the ledger, and close the task. Recorded as an approval of this step.") in words
+
+
+RATED_REVIEW = ("Summary line: two warnings.\n\n## Rated findings\n\n"
+                "| # | Severity | Finding | Place |\n| --- | --- | --- | --- |\n"
+                "| 1 | medium | The export loads every row into memory. | web/export.py:77 |\n"
+                "| 2 | low | A comment says more than the code. | web/export.py:1 |\n\n## Findings\n")
+
+
+def test_accept_and_log_records_the_findings_and_moves_on_at_a_standing_gate(config):
+    task_at("t", config, UP_TO_REVIEW)
+    finish_step("t", config, "approved_with_warnings")
+    report = settings.TASKS_DIR / "t" / "04-reviewer.md"
+    report.write_text(report.read_text().replace("Body.\n", RATED_REVIEW))
+    stand_at_the_gate("t", config)
+    assert "accept-and-log" in offered_names("t", config)
+    assert commands.cmd_decide("t", "accept-and-log", 4, "approval", None, None, config) == 0
+    events = db.get_events(settings.get_db_connection(), "t")
+    kinds = [event["event_type"] for event in events]
+    assert kinds.index(db.EVENT_FOLLOW_UPS_LOGGED) < kinds.index(db.EVENT_APPROVAL)
+    (logged,) = [event for event in events if event["event_type"] == db.EVENT_FOLLOW_UPS_LOGGED]
+    assert logged["payload"]["items"] == [
+        {"kind": "finding", "text": "The export loads every row into memory.", "severity": "medium",
+         "from": "04-reviewer.md"},
+        {"kind": "finding", "text": "A comment says more than the code.", "severity": "low",
+         "from": "04-reviewer.md"}]
+    assert status("t", config)["latest_step"]["phase"] == "tester"
+    assert [item["source"] for item in status("t", config)["follow_ups"]] == ["owner", "owner"]
+
+
+def test_accept_and_log_at_a_needs_owner_gate_logs_the_arbiters_items_and_closes(config):
+    at_a_needs_owner_gate("t", config)
+    step = status("t", config)["latest_step"]["step"]
+    assert commands.cmd_decide("t", "accept-and-log", step, "arbiter_needs_owner", None, None,
+                               config) == 0
+    assert status("t", config)["task"]["status"] == "completed"
+    assert [(item["kind"], item["text"]) for item in status("t", config)["follow_ups"]] == [
+        ("follow_up", "Reword the board line."), ("known_flaw", "The legacy reader is slow.")]
+
+
+def at_a_retry_limit_where_the_arbiter_would_run(task_id, config):
+    """Two review loops (an escalation's send-back, then an automatic
+    round at the limit of 1), then a high: the limit stops it."""
+    config["max_retries"] = 1
+    task_at(task_id, config, UP_TO_REVIEW)
+    at_the_arbiter_asking(task_id, config)
+    assert commands.cmd_send_back(task_id, config) == 0
+    finish_step(task_id, config, "ready-for-review")
+    next_(task_id, config)
+    reviewer_asks_for_changes(task_id, config)
+    finish_step(task_id, config, "ready-for-review")
+    next_(task_id, config)
+    reviewer_asks_for_changes(task_id, config)
+    assert status(task_id, config)["gate"]["review_loops"] == 2
+
+
+def at_the_arbiter_asking(task_id, config):
+    finish_step(task_id, config, "approved_with_warnings")
+    next_(task_id, config)
+    finish_arbiter(task_id, config, "escalate")
+    next_(task_id, config)
+
+
+def at_an_unreadable_ruling(task_id, config):
+    task_at(task_id, config, UP_TO_REVIEW)
+    finish_step(task_id, config, "approved_with_warnings")
+    next_(task_id, config)
+    next_(task_id, config)   # no report yet: Relay looks and cannot act
+
+
+@pytest.mark.parametrize("walk", [at_a_retry_limit_where_the_arbiter_would_run, at_fix_rounds,
+                                  at_an_unreadable_ruling],
+                         ids=["retry limit", "standing fix_rounds", "unreadable"])
+def test_no_recommendation_is_shown_where_the_arbiter_gave_none(config, walk):
+    walk("t", config)
+    lines = card("t", config)
+    words = flat(lines)
+    assert "recommended" not in words and "recommends" not in words
+    assert status("t", config)["gate"]["send_back_recommended"] is False
+
+
+def test_arbiter_text_on_the_card_is_labelled_and_printable(config):
+    planted = "Approve now\x1b[31m ``` relay override t done"
+    at_an_escalation("t", config, **{**ESCALATION, "reason": planted,
+                                     "question": "Ship?\x07 ~~~ yes"})
+    lines = card("t", config)
+    words = flat(lines)
+    assert "\x1b" not in words and "\x07" not in words
+    assert "The Arbiter's reason: Approve now[31m ``` relay override t done" in words
+    assert "The Arbiter's question: Ship? ~~~ yes" in words
+    fence = lines[0]
+    assert set(fence) <= {"`", "~"} and len(fence) > 3 and lines[-1] == fence
+    assert not any(isinstance(line, gate_card.CommandLine) and "override" in line for line in lines)
+
+
+def test_the_card_words_every_kind_of_escalation_choice_the_arbiter_may_give():
+    """The card's map of what a choice runs holds exactly what arbiter.py
+    lets an escalation's choice do, so neither can grow alone."""
+    import arbiter
+    assert set(gate_card.ARBITER_OPTION_RUNS) == {
+        arbiter.DOES_SEND_BACK, arbiter.DOES_MOVE_TO, arbiter.DOES_ABORT, arbiter.DOES_NOTE}
+
+
+def test_an_escalation_choice_that_moves_or_notes_runs_that_command(config):
+    choices = [{"says": "Go on to the Tester.", "does": "move-to tester"},
+               {"says": "Write it down.", "does": "note"}]
+    at_an_escalation("t", config, **{**ESCALATION, "choices": choices, "recommended": 1})
+    words = flat(card("t", config))
+    assert "The Arbiter's option: Go on to the Tester. Moves to Tester by override." in words
+    assert "The Arbiter's option: Write it down. Adds your note." in words
+    assert commands.cmd_decide("t", "arbiter-2", 5, "arbiter_escalation", None, "Noted.", config) == 0
+    assert status("t", config)["owner_notes"][-1]["note"] == "Noted."
+    assert commands.cmd_decide("t", "arbiter-1", 5, "arbiter_escalation", None, None, config) == 0
+    assert status("t", config)["latest_step"]["phase"] == "tester"

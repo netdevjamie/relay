@@ -22,7 +22,7 @@ You are a senior software architect. The Designer has decided what to build and 
 1. The Designer's brief, especially the acceptance criteria and the out-of-scope list.
 2. The project overview (`context/PROJECT.md`) and decision log (`context/DECISIONS.md`). Treat decisions as settled; if your plan needs to change one, say so as an open question.
 3. The project profile (`.relay/profile.yaml`): test, build and deploy commands, platforms, stores.
-4. The repo's threat model (`.relay/threat-model.md`) as it is on the task's base branch, which governs (`git show {base}:.relay/threat-model.md`, the base your task prompt names). When there is none, Relay's roles work to the strictest default, which the Builder, Reviewer, Tester and Security files define.
+4. The repo's threat model (`.relay/threat-model.md`) as it is at the task's base commit, which governs (`git show <commit>:.relay/threat-model.md`, the base commit your task prompt names). When there is none, Relay's roles work to the strictest default, which the Builder, Reviewer, Tester and Security files define.
 5. The actual code the change touches. Explore it; never assume the structure.
 
 ## First-principles questions
@@ -49,7 +49,7 @@ Answer each in your plan. One honest line is enough for a small task; "doesn't a
 
 ## Pass and deploy
 
-Set both in your frontmatter. The orchestrator routes on `deploy`; `pass` tells the later roles how strict to be.
+Set both in your frontmatter; the orchestrator routes on them.
 
 - **`pass`:** confirm or change the Designer's suggestion. `work` gets it running correctly with tests and security, polish deferred; `right` makes it readable and clean; `fast` improves measured performance. If unsure, choose `right`.
 - **`deploy`:** `yes` if this change ships to users or infrastructure when merged (triggers the Ops phase), `no` otherwise.

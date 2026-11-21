@@ -17,7 +17,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import db
+import migrate_legacy
 import relay
+from tests.cli_edge import run_relay
 import settings
 import run_state
 import routing
@@ -34,7 +36,7 @@ GATE_KEYS = {"state", "kind", "next_phase", "reason", "approve_command",
 LATEST_STEP_KEYS = {"step", "phase", "verdict", "recorded", "started", "artifact",
                     "artifact_path"}
 LIST_ROW_KEYS = TASK_SUMMARY_KEYS | {"gate_state", "gate_kind", "automatic_rounds", "fix_rounds",
-                                     "latest_step"}
+                                     "time_limit", "latest_step"}
 LIST_LATEST_STEP_KEYS = {"step", "phase", "verdict", "started"}
 HISTORY_ENTRY_KEYS = {"step", "phase", "verdict", "timestamp", "artifact"}
 
@@ -61,7 +63,7 @@ def start_task(task_id: str, config: dict) -> Path:
     task_dir = settings.TASKS_DIR / task_id
     task_dir.mkdir(parents=True)
     (task_dir / "brief.md").write_text("# Brief\n")
-    commands.cmd_start(task_id, auto=False, config=config)
+    assert commands.cmd_start(task_id, auto=False, config=config) == 0
     return task_dir
 
 
@@ -76,7 +78,7 @@ def advance_to_architect(task_id: str, config: dict) -> Path:
     """Start a task and move it past the brief gate, leaving the Architect running."""
     task_dir = start_task(task_id, config)
     write_artifact(task_dir, "01-designer.md", "designer", 1, "ready-for-architect")
-    commands.cmd_override(task_id, "architect", config)
+    assert commands.cmd_override(task_id, "architect", config) == 0
     return task_dir
 
 
@@ -91,7 +93,7 @@ def gate_then_next(task_id: str, config: dict, capsys) -> tuple[dict, str, dict]
     """Ask gate-check, then really run `relay next`. Returns (gate, next's output, state after)."""
     gate = read_api.gate_check_payload(task_id, config)["gate"]
     capsys.readouterr()
-    commands.cmd_next(task_id, auto=False, config=config)
+    assert commands.cmd_next(task_id, auto=False, config=config) == 0
     return gate, capsys.readouterr().out, run_state.load_run_state(task_id, config)
 
 
@@ -109,12 +111,20 @@ class TestSchemas:
         payload = read_api.status_payload("shape-status", sqlite_config)
         assert set(payload) == ENVELOPE_KEYS | {"task", "retries", "max_retries", "history",
                                                  "latest_step", "gate", "approvals", "test_runs",
-                                                 "interruptions", "owner_notes"}
+                                                 "interruptions", "time_limit_stops",
+                                                 "owner_notes", "builder_steps", "arbiter_rulings",
+                                                 "follow_ups", "sizing", "sizing_history",
+                                                 "risk_hint", "sizing_judgments"}
+        assert set(payload["sizing"]) == {"size", "risky", "deploy", "note"}
+        assert [entry["trigger"] for entry in payload["sizing_history"]] == [{"by": "start", "step": None}]
+        assert (payload["risk_hint"], payload["sizing_judgments"]) == (None, [])
         assert payload["owner_notes"] == []
+        assert payload["time_limit_stops"] == []
         assert payload["test_runs"] == []
         assert payload["interruptions"] == []
+        assert (payload["arbiter_rulings"], payload["follow_ups"]) == ([], [])
         assert payload["schema"] == "relay.status"
-        assert payload["schema_version"] == 3
+        assert payload["schema_version"] == 4
         assert payload["ok"] is True
         assert set(payload["task"]) == TASK_SUMMARY_KEYS | {"next_step", "worktree_path",
                                                             "branch", "base"}
@@ -146,7 +156,7 @@ class TestSchemas:
 
     def test_error_schema(self):
         payload = read_api.error_payload(read_api.ERROR_TASK_NOT_FOUND, "No run state for x.")
-        assert payload == {"schema": "relay.error", "schema_version": 3, "ok": False,
+        assert payload == {"schema": "relay.error", "schema_version": 4, "ok": False,
                            "error": {"code": "task_not_found", "message": "No run state for x."}}
 
     def test_approval_entry_schema(self, sqlite_config):
@@ -279,11 +289,11 @@ class TestGateStates:
 
     def test_closed_once_the_task_is_completed_or_abandoned(self, sqlite_config):
         start_task("gate-done", sqlite_config)
-        commands.cmd_override("gate-done", "done", sqlite_config)
+        assert commands.cmd_override("gate-done", "done", sqlite_config) == 0
         assert self.gate("gate-done", sqlite_config)["state"] == "closed"
 
         start_task("gate-aborted", sqlite_config)
-        commands.cmd_abort("gate-aborted", sqlite_config)
+        assert commands.cmd_abort("gate-aborted", sqlite_config) == 0
         assert self.gate("gate-aborted", sqlite_config)["state"] == "closed"
 
     def test_blocked_task_is_never_ready_even_when_routing_would_advance(self, sqlite_config):
@@ -310,7 +320,7 @@ class TestGateStates:
         assert self.gate("gate-broken", sqlite_config)["state"] == "waiting_on_agent"
 
     def test_an_unfinished_step_is_not_read_past_the_size_cap(self, sqlite_config):
-        """This read runs for every task on every refresh of the card, so
+        """This read runs for every task on every refresh of the board, so
         it stops at a fixed size. Frontmatter that closes past the cap is
         not found, which shows the rest of the file was not read."""
         task_dir = start_task("gate-huge", sqlite_config)
@@ -381,7 +391,7 @@ class TestGateCheckAgreesWithNext:
         write_artifact(task_dir, "01-designer.md", "designer", 1, "ready-for-architect")
         gate = read_api.gate_check_payload("agree-gate", sqlite_config)["gate"]
         capsys.readouterr()
-        commands.cmd_next("agree-gate", auto=False, config=sqlite_config)
+        assert commands.cmd_next("agree-gate", auto=False, config=sqlite_config) == 0
         out = capsys.readouterr().out
         assert "HUMAN GATE" in out
         assert gate["approve_command"] in out
@@ -392,7 +402,7 @@ class TestGateCheckAgreesWithNext:
         task_dir = start_task("agree-ready", sqlite_config)
         write_artifact(task_dir, "01-designer.md", "designer", 1, "ready-for-architect")
         gate = read_api.gate_check_payload("agree-ready", sqlite_config)["gate"]
-        commands.cmd_next("agree-ready", auto=False, config=sqlite_config)
+        assert commands.cmd_next("agree-ready", auto=False, config=sqlite_config) == 0
         state = run_state.load_run_state("agree-ready", sqlite_config)
         assert state["current_phase"] == gate["next_phase"] == "architect"
 
@@ -430,9 +440,9 @@ class TestGateCheckAgreesWithNext:
             self, sqlite_config, capsys):
         sqlite_config["max_retries"] = 1
         advance_to_architect("agree-retry", sqlite_config)
-        commands.cmd_override("agree-retry", "builder", sqlite_config)
+        assert commands.cmd_override("agree-retry", "builder", sqlite_config) == 0
         finish_step("agree-retry", sqlite_config, "ready-for-review")
-        commands.cmd_next("agree-retry", auto=False, config=sqlite_config)
+        assert commands.cmd_next("agree-retry", auto=False, config=sqlite_config) == 0
         finish_step("agree-retry", sqlite_config, "changes_requested")
 
         gate, _, state = gate_then_next("agree-retry", sqlite_config, capsys)  # first loop back
@@ -440,7 +450,7 @@ class TestGateCheckAgreesWithNext:
         assert state["current_phase"] == "builder"
 
         finish_step("agree-retry", sqlite_config, "ready-for-review")
-        commands.cmd_next("agree-retry", auto=False, config=sqlite_config)
+        assert commands.cmd_next("agree-retry", auto=False, config=sqlite_config) == 0
         finish_step("agree-retry", sqlite_config, "changes_requested")
 
         gate, out, state = gate_then_next("agree-retry", sqlite_config, capsys)  # over the limit
@@ -495,7 +505,7 @@ class TestNextRefusesBlockedTasks:
         before = ledger_snapshot(sqlite_config)
         capsys.readouterr()
         with pytest.raises(SystemExit) as exit_info:
-            commands.cmd_next("refuse", auto=False, config=sqlite_config)
+            run_relay(sqlite_config, "next", "refuse")
         out = capsys.readouterr().out
         assert exit_info.value.code == 1
         assert "Task refuse is blocked" in out
@@ -506,7 +516,7 @@ class TestNextRefusesBlockedTasks:
 
     def test_override_unblocks_and_next_works_again(self, sqlite_config, capsys):
         self.blocked_task_with_a_verdict_that_would_route_on("unblock", sqlite_config)
-        commands.cmd_override("unblock", "architect", sqlite_config)
+        assert commands.cmd_override("unblock", "architect", sqlite_config) == 0
         state = run_state.load_run_state("unblock", sqlite_config)
         assert (state["status"], state["current_phase"]) == ("in_progress", "architect")
 
@@ -518,16 +528,16 @@ class TestNextRefusesBlockedTasks:
     def test_next_after_the_retry_limit_refuses_instead_of_rechecking(self, sqlite_config, capsys):
         sqlite_config["max_retries"] = 0
         advance_to_architect("limit", sqlite_config)
-        commands.cmd_override("limit", "builder", sqlite_config)
+        assert commands.cmd_override("limit", "builder", sqlite_config) == 0
         finish_step("limit", sqlite_config, "ready-for-review")
-        commands.cmd_next("limit", auto=False, config=sqlite_config)
+        assert commands.cmd_next("limit", auto=False, config=sqlite_config) == 0
         finish_step("limit", sqlite_config, "changes_requested")
-        commands.cmd_next("limit", auto=False, config=sqlite_config)  # hits the limit: blocked
+        assert commands.cmd_next("limit", auto=False, config=sqlite_config) == 0  # hits the limit: blocked
         assert run_state.load_run_state("limit", sqlite_config)["status"] == "blocked"
 
         capsys.readouterr()
         with pytest.raises(SystemExit) as exit_info:
-            commands.cmd_next("limit", auto=False, config=sqlite_config)
+            run_relay(sqlite_config, "next", "limit")
         assert exit_info.value.code == 1
         assert ("Task limit is stopped: builder has gone back for fixes 0 times in a row "
                 "with nobody deciding (limit 0)." in capsys.readouterr().out)
@@ -535,16 +545,16 @@ class TestNextRefusesBlockedTasks:
     def task_stopped_at_the_retry_limit(self, task_id, config):
         config["max_retries"] = 0
         advance_to_architect(task_id, config)
-        commands.cmd_override(task_id, "builder", config)
+        assert commands.cmd_override(task_id, "builder", config) == 0
         finish_step(task_id, config, "ready-for-review")
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
         finish_step(task_id, config, "changes_requested")
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
         assert run_state.load_run_state(task_id, config)["status"] == "blocked"
 
     def test_override_gets_a_task_past_the_retry_limit(self, sqlite_config, capsys):
         self.task_stopped_at_the_retry_limit("limit-override", sqlite_config)
-        commands.cmd_override("limit-override", "builder", sqlite_config)
+        assert commands.cmd_override("limit-override", "builder", sqlite_config) == 0
         state = run_state.load_run_state("limit-override", sqlite_config)
         assert (state["status"], state["current_phase"]) == ("in_progress", "builder")
         finish_step("limit-override", sqlite_config, "ready-for-review")
@@ -553,7 +563,7 @@ class TestNextRefusesBlockedTasks:
 
     def test_abort_closes_a_task_stopped_at_the_retry_limit(self, sqlite_config):
         self.task_stopped_at_the_retry_limit("limit-abort", sqlite_config)
-        commands.cmd_abort("limit-abort", sqlite_config)
+        assert commands.cmd_abort("limit-abort", sqlite_config) == 0
         assert run_state.load_run_state("limit-abort", sqlite_config)["status"] == "abandoned"
         assert read_api.gate_check_payload("limit-abort", sqlite_config)["gate"]["state"] == "closed"
 
@@ -600,7 +610,7 @@ class TestReadsNeverWrite:
     def test_recorded_turns_true_once_next_has_picked_the_verdict_up(self, sqlite_config):
         task_dir = start_task("recorded", sqlite_config)
         write_artifact(task_dir, "01-designer.md", "designer", 1, "ready-for-architect")
-        commands.cmd_next("recorded", auto=False, config=sqlite_config)
+        assert commands.cmd_next("recorded", auto=False, config=sqlite_config) == 0
         latest = read_api.status_payload("recorded", sqlite_config)["latest_step"]
         assert (latest["verdict"], latest["recorded"]) == ("ready-for-architect", True)
 
@@ -775,17 +785,34 @@ class TestDecideRouting:
         decision = self.decide("security", "secure", state=self.NON_DEPLOY_TESTED)
         assert decision.outcome == "complete_skipping_ops"
 
-    @pytest.mark.parametrize("phase", ["security", "pentest"])
-    def test_non_deploy_task_with_security_findings_stops_for_the_owner(self, phase):
-        decision = self.decide(phase, "findings", state=self.NON_DEPLOY_TESTED)
-        assert (decision.outcome, decision.gate_kind, decision.next_phase,
-                decision.send_back_recommended) == ("owner_gate", "approval", "done", True)
+    def test_non_deploy_task_with_security_findings_goes_to_the_arbiter(self):
+        """Since the Arbiter, findings go to it. A findings gate left
+        standing from before still stops for the owner, as it did."""
+        decision = self.decide("security", "findings", state=self.NON_DEPLOY_TESTED)
+        assert (decision.outcome, decision.next_phase, decision.arbiter_situation) == (
+            "advance", "arbiter", "warning")
+        standing = self.decide("security", "findings", state=self.NON_DEPLOY_TESTED,
+                               already_routed=True)
+        assert (standing.outcome, standing.gate_kind, standing.next_phase,
+                standing.send_back_recommended) == ("owner_gate", "approval", "done", True)
 
-    def test_deploy_task_with_security_findings_gates_on_moving_to_ops(self):
+    def test_legacy_pentest_findings_stop_for_the_owner_to_decide(self):
+        """`pentest` has no routes any more: its verdict is unknown, so the
+        owner decides, and no send-back is recommended."""
+        decision = self.decide("pentest", "findings", state=self.NON_DEPLOY_TESTED)
+        assert (decision.outcome, decision.gate_kind, decision.next_phase,
+                decision.send_back_recommended, decision.redirected_to_tester) == (
+            "owner_gate", "owner_decision", None, False, False)
+
+    def test_deploy_task_with_security_findings_goes_to_the_arbiter(self):
+        """And on a deploy task; a findings gate left standing still gates
+        moving to Ops."""
         deploying = dict(self.NON_DEPLOY_TESTED, deploy_intent=True)
         decision = self.decide("security", "findings", state=deploying)
-        assert (decision.outcome, decision.gate_kind, decision.next_phase,
-                decision.send_back_recommended) == ("owner_gate", "approval", "ops", True)
+        assert (decision.outcome, decision.next_phase) == ("advance", "arbiter")
+        standing = self.decide("security", "findings", state=deploying, already_routed=True)
+        assert (standing.outcome, standing.gate_kind, standing.next_phase,
+                standing.send_back_recommended) == ("owner_gate", "approval", "ops", True)
 
     def test_old_order_task_is_sent_to_the_tester_before_ops(self):
         untested = {"deploy_intent": True, "history": [{"phase": "builder", "step": 3}]}
@@ -806,6 +833,70 @@ class TestDecideRouting:
         assert (decision.outcome, decision.next_phase) == ("advance", "builder")
 
 
+# The phases and verdicts of the one task in the ledger that ran the legacy
+# `pentest` phase (web-redesign), in its order.
+LEGACY_PENTEST_TRAIL = [("architect", "ready-for-builder"), ("builder", "ready-for-review"),
+                        ("reviewer", "approved"), ("security", "secure"),
+                        ("tester", "pass_with_concerns"), ("pentest", "secure"),
+                        ("ops", "deploy-ready")]
+
+
+def import_legacy_task(task_id: str, trail: list[tuple[str, str]], status: str) -> Path:
+    """A task recorded before Security absorbed `pentest`, as its old
+    run.yaml and reports say, imported into the ledger the way `relay
+    recover --from-projections` imports one."""
+    task_dir = settings.TASKS_DIR / task_id
+    task_dir.mkdir(parents=True)
+    current_phase = "done" if status == "completed" else trail[-1][0]
+    history = "".join(f"- {{phase: {phase}, step: {step}, timestamp: '2026-05-24T22:00:0{step}Z', "
+                      f"verdict: {verdict}}}\n"
+                      for step, (phase, verdict) in enumerate(trail, start=1))
+    (task_dir / "run.yaml").write_text(
+        f"task_id: {task_id}\ncreated: '2026-05-24T22:00:00Z'\n"
+        f"updated: '2026-05-24T23:00:00Z'\nstatus: {status}\ncurrent_phase: {current_phase}\n"
+        f"next_step: {len(trail) + 1}\nschema_version: 1\nrepo: relay\ndeploy_intent: true\n"
+        f"retries: {{}}\nhistory:\n{history}")
+    (task_dir / "brief.md").write_text("# Brief\n")
+    for step, (phase, verdict) in enumerate(trail, start=1):
+        write_artifact(task_dir, f"{step:02d}-{phase}.md", phase, step, verdict)
+    result = migrate_legacy.import_task(settings.get_db_connection(), task_id, task_dir)
+    assert result["ok"] is True, result
+    return task_dir
+
+
+class TestLegacyPentestTasks:
+    """`pentest` has left the routing tables, but a task whose history holds
+    a `pentest` step still loads and reads: relay status, show and the read
+    API."""
+
+    def test_a_finished_task_with_a_pentest_step_loads_and_reads(self, sqlite_config, capsys):
+        import_legacy_task("old-pentest", LEGACY_PENTEST_TRAIL, "completed")
+        payload = read_api.status_payload("old-pentest", sqlite_config)
+        assert payload["ok"] is True
+        assert [entry["phase"] for entry in payload["history"]] == [
+            phase for phase, _ in LEGACY_PENTEST_TRAIL]
+        assert read_api.gate_check_payload("old-pentest", sqlite_config)["ok"] is True
+        assert "old-pentest" in [row["task_id"] for row in
+                                 read_api.list_payload(sqlite_config)["tasks"]]
+        capsys.readouterr()
+        commands.cmd_status("old-pentest", sqlite_config)
+        assert "06-pentest.md [secure]" in capsys.readouterr().out
+        assert commands.cmd_show("old-pentest", "06-pentest", sqlite_config) == 0
+        assert "phase: pentest" in capsys.readouterr().out
+
+    def test_an_open_task_whose_latest_step_is_pentest_stops_for_the_owner(
+            self, sqlite_config, capsys):
+        import_legacy_task("open-pentest", LEGACY_PENTEST_TRAIL[:-1], "in_progress")
+        gate = read_api.gate_check_payload("open-pentest", sqlite_config)["gate"]
+        assert (gate["kind"], gate["next_phase"], gate["reason"]) == (
+            "owner_decision", None, "Unknown verdict 'secure' from pentest. Human must decide.")
+        status = read_api.status_payload("open-pentest", sqlite_config)
+        assert status["latest_step"]["phase"] == "pentest"
+        capsys.readouterr()
+        commands.cmd_status("open-pentest", sqlite_config)
+        assert "06-pentest.md [secure]" in capsys.readouterr().out
+
+
 class TestTheFixRoundsKey:
     """The list of highs per fix round is in a gate only where the
     tripwire stopped the task; every other gate reads as it did."""
@@ -821,9 +912,9 @@ class TestTheFixRoundsKey:
         start_task("other-gate", sqlite_config)
         for verdict, extra in walk:
             finish_step("other-gate", sqlite_config, verdict, extra)
-            commands.cmd_next("other-gate", auto=False, config=sqlite_config)
+            assert commands.cmd_next("other-gate", auto=False, config=sqlite_config) == 0
             if verdict == "ready-for-architect" and len(walk) > 1:
-                commands.cmd_override("other-gate", "architect", sqlite_config)
+                assert commands.cmd_override("other-gate", "architect", sqlite_config) == 0
         gate = read_api.gate_check_payload("other-gate", sqlite_config)["gate"]
         assert gate["kind"] == kind
         assert set(gate) == GATE_KEYS

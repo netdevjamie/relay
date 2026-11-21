@@ -6,17 +6,22 @@ import codecs
 import json
 from pathlib import Path
 
+import agents
+import arbiter
+import arbiter_record
 import db
 import project_profile
+import risk_record
 import settings
 import sizing
 from settings import (
-    VALID_VERDICTS, _CLI_CMD, _resolve_repo_path, _sqlite_enabled, get_db_connection,
+    ARBITER, VALID_VERDICTS, _CLI_CMD, _resolve_repo_path, _sqlite_enabled, get_db_connection,
 )
 from run_state import _is_agent_artifact, frontmatter_in, load_run_state
 from routing import (
-    GATE_APPROVAL, GATE_BLOCKED, GATE_DEPLOY_APPROVAL, GATE_RETRY_LIMIT, ROUTE_ADVANCE,
-    ROUTE_COMPLETE, ROUTE_COMPLETE_SKIPPING_OPS, ROUTE_RETRY_LIMIT, SEND_BACK_GATE_KINDS,
+    GATE_APPROVAL, GATE_ARBITER_NEEDS_OWNER, GATE_ARBITER_UNREADABLE, GATE_BLOCKED,
+    GATE_DEPLOY_APPROVAL, GATE_RETRY_LIMIT, GATE_RISK_UNANSWERED, ROUTE_ADVANCE, ROUTE_COMPLETE,
+    ROUTE_COMPLETE_SKIPPING_OPS, ROUTE_RETRY_LIMIT, SEND_BACK_GATE_KINDS, VERDICTS_RELAY_TESTS,
     _deploy_flag, decide_routing, fix_round_summary,
 )
 from recorded_runs import is_test_command_confirmed, latest_test_run, read_test_runs
@@ -36,21 +41,18 @@ from owner_notes import read_owner_notes
 #
 # The shapes are a contract (docs/json-api.md, tests/test_read_api.py).
 # Adding a key is fine; renaming or removing one, or changing what a value
-# means, is a new schema_version.
-#
-# 2: `retries` counts automatic rounds only (in version 1 it also counted
-#    send-backs), and a task the limit stopped reads as a `retry_limit` gate
-#    that offers send-back (in version 1, `blocked` with no send_back_command).
-# 3: the process audit and the checks on a report are gone: no `audits` on
-#    a status, no `audit` on a list row, no `process_audit` gate, no
-#    `relay_found`, and `fix_rounds.lines` is one sentence.
+# means, is a new schema_version. What each version changed is in the
+# version table in docs/json-api.md.
 
-JSON_SCHEMA_VERSION = 3
+JSON_SCHEMA_VERSION = 4
 
 GATE_READY = "ready"                        # `relay next` will move on without the owner
 GATE_WAITING_ON_AGENT = "waiting_on_agent"  # the current step has no verdict yet
 GATE_WAITING_ON_OWNER = "waiting_on_owner"  # `relay next` would stop for the owner
 GATE_CLOSED = "closed"                      # completed or abandoned
+# The gate kind of a task blocked because a role ran past its time limit.
+# Not routing's: a stopped step never reaches routing.
+GATE_TIME_LIMIT = "time_limit"
 
 ERROR_TASK_NOT_FOUND = "task_not_found"
 ERROR_LEDGER_UNAVAILABLE = "ledger_unavailable"
@@ -162,30 +164,63 @@ def read_latest_step(task_id: str, state: dict, config: dict) -> dict | None:
 def _gate(state_name: str, reason: str, *, kind: str | None = None,
           next_phase: str | None = None, approve_command: str | None = None,
           send_back_command: str | None = None, send_back_recommended: bool = False,
-          fix_rounds: dict | None = None) -> dict:
-    """`fix_rounds` says how many fix rounds have run, where the tripwire
-    stopped the task (routing.fix_round_summary). It is there only at such a
-    gate: every other gate reads exactly as it did before it."""
+          fix_rounds: dict | None = None, time_limit: dict | None = None,
+          arbiter_ruling: dict | None = None, review_loops: int | None = None) -> dict:
+    """`fix_rounds` says how many fix rounds have run, at a fix_rounds gate
+    left standing from before the Arbiter (routing.fix_round_summary);
+    `time_limit` describes the stop, where a role's time limit stopped it;
+    `arbiter_ruling` is the Arbiter's ruling (every string the Arbiter's
+    words), at a gate its step stopped at; `review_loops` is how many ran on
+    this plan, where the retry limit stopped a route the Arbiter would have
+    taken. Each is there only at its own gate: every other gate reads exactly
+    as it did before them."""
     gate = {"state": state_name, "kind": kind, "next_phase": next_phase,
             "reason": reason, "approve_command": approve_command,
             "send_back_command": send_back_command,
             "send_back_recommended": send_back_recommended}
     if fix_rounds:
         gate["fix_rounds"] = fix_rounds
+    if time_limit:
+        gate["time_limit"] = time_limit
+    if arbiter_ruling:
+        gate["arbiter"] = arbiter_ruling
+    if review_loops is not None:
+        gate["review_loops"] = review_loops
     return gate
 
 
-def _records_for_step(task_id: str, latest_step: dict, config: dict) -> dict:
-    """What Relay recorded about the latest step that routing reads: the
-    plan's deploy flag and Relay's test run."""
-    planned_deploy = None
+def _records_for_step(task_id: str, state: dict, latest_step: dict, config: dict) -> dict:
+    """What Relay recorded about the latest step that routing reads, as
+    `relay next` gathers it: the plan's deploy flag, Relay's test run (for
+    an Arbiter step, the run at the report it ruled on), the Arbiter's
+    ruling (as Relay recorded it, else its report), the task's newest run, its loop counts, and whether the verdict
+    was already recorded by an earlier `relay next`."""
+    planned_deploy, arbiter_report = None, None
     # As in cmd_next: the Architect's plan must say whether the task deploys.
     if latest_step["phase"] == "architect" and latest_step["artifact_path"]:
         planned_deploy = _deploy_flag(
             _frontmatter_or_empty(Path(latest_step["artifact_path"])).get("deploy"))
-    test_run = latest_test_run(task_id, config, latest_step["step"])
-    return {"planned_deploy": planned_deploy, "test_run": test_run,
-            "test_command_confirmed": is_test_command_confirmed(task_id, config, test_run)}
+    run_step = latest_step["step"]
+    if latest_step["phase"] == ARBITER:
+        trigger = arbiter.trigger_of(state.get("history"), latest_step["step"])
+        run_step = trigger.step if trigger else None
+        # As in cmd_next: the ruling Relay recorded, once it has acted on one.
+        arbiter_report = arbiter_record.recorded_report(task_id, latest_step["step"], config)
+        if arbiter_report is None and latest_step["artifact_path"]:
+            arbiter_report = _frontmatter_or_empty(Path(latest_step["artifact_path"]))
+    test_run = latest_test_run(task_id, config, run_step) if run_step is not None else None
+    test_runs = read_test_runs(task_id, config)
+    # As in cmd_next: what a judging role's report says of the sizing.
+    judgment = (risk_record.judgment_for_step(
+        task_id, state, latest_step["phase"], latest_step["step"],
+        _frontmatter_or_empty(Path(latest_step["artifact_path"])) if latest_step["artifact_path"] else {},
+        config) if latest_step["phase"] in sizing.JUDGING_ROLES else None)
+    return {"planned_deploy": planned_deploy, "test_run": test_run, "judgment": judgment,
+            "test_command_confirmed": is_test_command_confirmed(task_id, config, test_run),
+            "arbiter_report": arbiter_report,
+            "latest_task_test_run": test_runs[-1] if test_runs else None,
+            "loop_counts": arbiter.loop_counts(state.get("history"), test_runs, VERDICTS_RELAY_TESTS),
+            "already_routed": latest_step["recorded"]}
 
 
 def _decided(state: dict, latest_step: dict, records: dict, config: dict) -> dict:
@@ -193,8 +228,14 @@ def _decided(state: dict, latest_step: dict, records: dict, config: dict) -> dic
                               planned_deploy=records["planned_deploy"],
                               test_run=records["test_run"],
                               test_command_confirmed=records["test_command_confirmed"],
-                              sizing=sizing.read_sizing(state["task_id"], config))
-    return {"decision": decision, "test_run": records["test_run"]}
+                              sizing=sizing.read_sizing(state["task_id"], config),
+                              arbiter_report=records["arbiter_report"],
+                              latest_task_test_run=records["latest_task_test_run"],
+                              loop_counts=records["loop_counts"],
+                              already_routed=records["already_routed"],
+                              judgment=records["judgment"])
+    return {"decision": decision, "test_run": records["test_run"], "latest_step": latest_step,
+            "loop_counts": records["loop_counts"]}
 
 
 def _paused_gate() -> dict:
@@ -202,16 +243,52 @@ def _paused_gate() -> dict:
                  reason="Task is paused; the owner decides how to continue.")
 
 
+def _time_limit_stop_of(task_id: str, latest_step: dict, config: dict) -> dict | None:
+    """The time-limit stop recorded for the latest step, if there is one
+    and it can be read."""
+    try:
+        stops = agents.read_time_limit_stops(task_id, config)
+    except _EVENTS_UNREADABLE:
+        return None
+    return next((stop for stop in reversed(stops) if stop["step"] == latest_step["step"]), None)
+
+
+def _time_limit_gate(stop: dict, latest_step: dict) -> dict:
+    """The gate of a task a role's time limit stopped. Whatever report the
+    role left is named but never read: nothing is routed on it."""
+    left = latest_step.get("artifact_path")
+    report_left = bool(left) and Path(left).is_file() and not Path(left).is_symlink()
+    phase = stop["phase"]
+    return _gate(GATE_WAITING_ON_OWNER, kind=GATE_TIME_LIMIT, next_phase=phase,
+                 reason=(f"The {agents.AGENT_NAMES.get(phase, str(phase).capitalize())} role ran "
+                         f"past its {agents.limit_in_words(stop['limit_seconds'])} limit and "
+                         f"was stopped."),
+                 time_limit={"phase": phase, "step": stop["step"],
+                             "limit_seconds": stop["limit_seconds"],
+                             "ran_seconds": stop["ran_seconds"], "report_left": report_left,
+                             "report": latest_step.get("artifact") if report_left else None})
+
+
 def read_gate(task_id: str, state: dict, latest_step: dict | None, config: dict) -> dict:
     """Where the task stands: can it move on, and if not, who is it waiting on?
 
     Uses decide_routing(), the same decision `relay next` acts on, and like
     `relay next` it never treats a blocked task as ready. A blocked task is
-    one the limit on automatic rounds stopped (a `retry_limit` gate, as it
-    was before `relay next` stopped it) or, failing that, a paused one."""
+    one a role's time limit stopped (a `time_limit` gate, read before any
+    verdict), one the limit on automatic rounds stopped (a `retry_limit`
+    gate, as it was before `relay next` stopped it) or, failing that, a
+    paused one."""
     status = state.get("status")
     if status in ("completed", "abandoned"):
         return _gate(GATE_CLOSED, f"Task is {status}.")
+    if status == "blocked" and latest_step:
+        stop = _time_limit_stop_of(task_id, latest_step, config)
+        if stop:
+            return _time_limit_gate(stop, latest_step)
+    if latest_step and latest_step["phase"] == ARBITER and latest_step["verdict"] is None:
+        unreadable = _unreadable_arbiter_gate(task_id, latest_step, config)
+        if unreadable:
+            return unreadable
     # `relay next` refuses a blocked task too: the owner has to act.
     if latest_step is None or latest_step["verdict"] is None:
         if status == "blocked":
@@ -220,7 +297,7 @@ def read_gate(task_id: str, state: dict, latest_step: dict | None, config: dict)
         return _gate(GATE_WAITING_ON_AGENT, f"No verdict from {phase} yet.")
 
     try:
-        records = _records_for_step(task_id, latest_step, config)
+        records = _records_for_step(task_id, state, latest_step, config)
     except _EVENTS_UNREADABLE:
         # A blocked task read as blocked before its events were ever looked
         # at. It still does when one of them cannot be read, so that event
@@ -229,6 +306,47 @@ def read_gate(task_id: str, state: dict, latest_step: dict | None, config: dict)
             raise
         return _paused_gate()
     return _gate_for_decision(task_id, state, _decided(state, latest_step, records, config), config)
+
+
+def _unreadable_arbiter_gate(task_id: str, latest_step: dict, config: dict) -> dict | None:
+    """The gate of an Arbiter step with no verdict that `relay next` has
+    looked at and found unreadable (an arbiter_unreadable event for the
+    step). None before it has looked: until then the Arbiter may still be
+    running, so the step reads as waiting on it."""
+    try:
+        rulings = arbiter_record.read_rulings(task_id, config)
+    except _EVENTS_UNREADABLE:
+        return None
+    problem = next((ruling["problem"] for ruling in reversed(rulings)
+                    if ruling["step"] == latest_step["step"] and ruling["problem"]), None)
+    if problem is None:
+        return None
+    return _gate(GATE_WAITING_ON_OWNER, f"Relay could not act on the Arbiter's decision: {problem}",
+                 kind=GATE_ARBITER_UNREADABLE, send_back_command=f"{_CLI_CMD} send-back {task_id}",
+                 arbiter_ruling=_arbiter_details(latest_step, None, problem=problem))
+
+
+def _arbiter_details(latest_step: dict, decision, problem: str | None = None) -> dict:
+    """The gate's `arbiter` key: the Arbiter's ruling as Relay read it.
+    Every string in `reason`, the lists, `question` and the choices'
+    `says` is the Arbiter's words, untrusted role text."""
+    ruling = decision.ruling if decision else None
+    trigger = decision.trigger if decision else None
+    return {"step": latest_step["step"], "report": latest_step["artifact"],
+            "situation": trigger.situation if trigger else None,
+            "decision": ruling.decision if ruling else None,
+            "reason": ruling.reason if ruling else None,
+            "replan_to": ruling.replan_to if ruling else None,
+            "fix": list(ruling.fix) if ruling else [],
+            "do_not_reopen": list(ruling.do_not_reopen) if ruling else [],
+            "follow_ups": list(ruling.follow_ups) if ruling else [],
+            "known_flaws": list(ruling.known_flaws) if ruling else [],
+            "question": ruling.question if ruling else None,
+            "choices": [{"name": choice.name, "says": choice.says, "does": choice.action,
+                         "phase": choice.phase} for choice in (ruling.choices if ruling else ())],
+            "recommends": decision.recommends if decision else None,
+            "needs_owner_because": list(decision.needs_owner_because) if decision else [],
+            "problem": problem if problem is not None else (decision.arbiter_problem if decision else None)}
 
 
 def _gate_for_decision(task_id: str, state: dict, decided: dict, config: dict) -> dict:
@@ -242,18 +360,24 @@ def _gate_for_decision(task_id: str, state: dict, decided: dict, config: dict) -
 
     approve_command = None
     send_back_command = None
-    if decision.gate_kind == GATE_APPROVAL:
+    if decision.gate_kind in (GATE_APPROVAL, GATE_RISK_UNANSWERED):
         approve_command = f"{_CLI_CMD} override {task_id} {decision.next_phase}"
     elif decision.gate_kind == GATE_DEPLOY_APPROVAL:
         approve_command = f"{_CLI_CMD} override {task_id} done"
+    elif decision.gate_kind == GATE_ARBITER_NEEDS_OWNER and decision.next_phase:
+        approve_command = f"{_CLI_CMD} override {task_id} {decision.next_phase}"
     if decision.gate_kind in SEND_BACK_GATE_KINDS:
         send_back_command = f"{_CLI_CMD} send-back {task_id}"
     fix_rounds = fix_round_summary(state) if decision.lists_fix_rounds else None
+    has_ruling = decision.ruling is not None or decision.arbiter_problem is not None
     return _gate(GATE_WAITING_ON_OWNER, decision.reason, kind=decision.gate_kind,
                  next_phase=decision.next_phase, approve_command=approve_command,
                  send_back_command=send_back_command,
                  send_back_recommended=decision.send_back_recommended,
-                 fix_rounds=fix_rounds)
+                 fix_rounds=fix_rounds,
+                 arbiter_ruling=_arbiter_details(decided["latest_step"], decision) if has_ruling else None,
+                 review_loops=(decided["loop_counts"].review_loops_since_replan
+                               if decision.lists_review_loops else None))
 
 
 def read_approvals(task_id: str, config: dict) -> list[dict]:
@@ -330,6 +454,7 @@ def status_payload(task_id: str, config: dict) -> dict:
     task = _task_summary(task_id, state)
     task.update({"next_step": state.get("next_step"), "worktree_path": state.get("worktree_path"),
                  "branch": state.get("branch"), "base": state.get("base")})
+    test_runs = read_test_runs(task_id, config)
     return _envelope("relay.status", {
         "task": task,
         "retries": dict(state.get("retries") or {}),
@@ -338,10 +463,35 @@ def status_payload(task_id: str, config: dict) -> dict:
         "latest_step": latest_step,
         "gate": read_gate(task_id, state, latest_step, config),
         "approvals": read_approvals(task_id, config),
-        "test_runs": read_test_runs(task_id, config),
+        "test_runs": test_runs,
         "interruptions": read_interruptions(task_id, config),
+        "time_limit_stops": agents.read_time_limit_stops(task_id, config),
         "owner_notes": read_owner_notes(task_id, config),
+        "builder_steps": _builder_steps(state, test_runs),
+        "arbiter_rulings": arbiter_record.read_rulings(task_id, config),
+        "follow_ups": arbiter_record.read_follow_ups(task_id, config),
+        "sizing": _sizing_now(task_id, config),
+        "sizing_history": sizing.read_sizing_history(task_id, config),
+        "risk_hint": risk_record.latest_risk_hint(task_id, config),
+        "sizing_judgments": risk_record.read_sizing_judgments(task_id, config),
     })
+
+
+def _sizing_now(task_id: str, config: dict) -> dict:
+    current = sizing.read_sizing(task_id, config)
+    return {"size": current.size, "risky": current.risky, "deploy": current.deploy,
+            "note": current.note}
+
+
+def _builder_steps(state: dict, test_runs: list[dict]) -> dict:
+    """The task's Builder steps by cause (arbiter.loop_counts), for the
+    task and since the latest re-plan, with each step's cause."""
+    counts = arbiter.loop_counts(state.get("history"), test_runs, VERDICTS_RELAY_TESTS)
+    return {"replan_step": counts.replan_step,
+            "review_loops_since_replan": counts.review_loops_since_replan,
+            "task": counts.by_cause(False), "since_replan": counts.by_cause(True),
+            "steps": [{"step": builder.step, "cause": builder.cause, "role": builder.role,
+                       "started_by": builder.started_by} for builder in counts.steps]}
 
 
 def gate_check_payload(task_id: str, config: dict) -> dict:
@@ -387,6 +537,7 @@ def list_payload(config: dict) -> dict:
                       "automatic_rounds": ((state.get("retries") or {}).get(gate["next_phase"], 0)
                                            if stopped else None),
                       "fix_rounds": gate["fix_rounds"]["count"] if "fix_rounds" in gate else None,
+                      "time_limit": gate.get("time_limit"),
                       "latest_step": _latest_step_in_brief(latest_step)})
     return _envelope("relay.list", {"tasks": tasks})
 

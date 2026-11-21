@@ -1,14 +1,14 @@
-"""Scratch Relay home for the phone test plan (relay-mobile-gates.md).
+"""Scratch Relay home for the phone test plan (mobile-gates.md).
 
-    python3 docs/manual-tests/relay-mobile-gates-setup.py          make it
-    python3 docs/manual-tests/relay-mobile-gates-setup.py --clean  remove it
+    python3 docs/manual-tests/mobile-gates-setup.py          make it
+    python3 docs/manual-tests/mobile-gates-setup.py --clean  remove it
 
-It makes $TMPDIR/relay-mobile-gates-phone/ with its own ledger and tasks
+It makes $TMPDIR/relay-phone-gates/ with its own ledger and tasks
 folder, never the live ~/Projects/.relay, and walks two scratch tasks with
 the suite's own helpers:
   phone-review  waiting at the Reviewer's gate (step 4)
   phone-close   waiting at Security's gate, which closes (step 6)
-It also writes `relay` in that folder: this worktree's relay.py run against
+It also writes `relay` in that folder: this checkout's relay.py run against
 the scratch home, so the plan's commands never touch the real install.
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 ORCH = REPO / "orchestrator"
-HOME = Path(os.environ.get("TMPDIR", "/tmp")).resolve() / "relay-mobile-gates-phone"
+HOME = Path(os.environ.get("TMPDIR", "/tmp")).resolve() / "relay-phone-gates"
 BRIEF = ("# Phone test: {title}\n\nA scratch task for the phone test plan. Nothing here is real.\n\n"
          "Last line of the phone test brief.\n")
 

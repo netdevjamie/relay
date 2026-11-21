@@ -6,7 +6,8 @@ page; details live in the docs it points to.
 ## What Relay is
 
 Relay runs a piece of software work through a short chain of Claude Code
-roles (Designer, Architect, Builder, Reviewer, Tester, Security, Ops),
+roles (Designer, Architect, Builder, Reviewer, Tester, Security, Ops,
+and an Arbiter for warnings and long loops),
 records every step in a SQLite ledger, and stops for the owner at gates that
 code enforces, not prompts. The roles do the work, Relay's code keeps the
 rules, and the owner decides what matters.
@@ -39,14 +40,20 @@ rules, and the owner decides what matters.
   the brief mid-run changes nothing.
 - **Relay runs the tests.** After the Builder and after the Tester, `relay
   next` runs the profile's test command on the task's commit and records the
-  outcome. A failed run goes back to the Builder.
-- **Fix rounds are capped.** A Reviewer, Tester or Security report with a
-  high finding sends the task back to the Builder. After 2 fix rounds Relay
-  stops and the owner decides: one more round, a different route, or abort.
-  Separately, `max_retries` (default 3) automatic loops back into the same
-  phase stop the task.
-- **Gates.** By default the owner approves the brief, the plan, and any
-  verdict that passes with something still wrong. `relay waiting`, `relay
+  outcome. A failed run goes back to the Builder. A passing run stops for
+  the owner when the branch changed the test harness or fewer tests ran.
+- **The base is a commit.** `relay start` confirms the task's base and
+  records its commit; it is confirmed again before every role starts.
+- **The Arbiter decides long loops and warnings.** A Reviewer, Tester or
+  Security report with a high finding sends the task back to the Builder.
+  Once 2 review loops have run on the current plan, or at any pass with
+  warnings, the Arbiter rules move on, a targeted round, a re-plan or
+  escalate to the owner; code stops for the owner before a move on could
+  close the task, reach Ops, or pass an open Security high or a failing
+  test run. Separately, `max_retries` (default 3) automatic loops back into
+  the same phase stop the task.
+- **Gates.** By default the owner approves the brief, the plan, whatever
+  the Arbiter escalates, and anything that deploys. `relay waiting`, `relay
   card`, `relay show` and `relay decide` give each gate in short lines with
   every choice named, so it can be decided over Claude Code's Remote Control.
   `relay send-back --note` returns work, `relay note` leaves a note every
@@ -62,7 +69,7 @@ rules, and the owner decides what matters.
 
 - Work happens on a branch of its own, in the checkout `relay start`
   records (often a worktree the session made). Never on the base branch.
-- Read-only roles (Designer, Architect, Reviewer, Security, Ops) write only
+- Read-only roles (Designer, Architect, Reviewer, Security, Ops, Arbiter) write only
   their own report; a hook enforces it.
 - Each repo commits `.relay/profile.yaml` (commands, deploy targets, secret
   names only; see `docs/profile.md`) and may commit `.relay/threat-model.md`,

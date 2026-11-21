@@ -1,8 +1,8 @@
 """Where Relay lives and what it is configured to do.
 
-Paths (central install, or a legacy per-project .workflow/), the phase and
-verdict vocabulary, YAML helpers, the config file, the repo registry and
-the process's one ledger connection.
+Paths (the central install), the phase and verdict vocabulary, YAML
+helpers, the config file, the repo registry and the process's one ledger
+connection.
 
 Other modules read the values that tests replace (TASKS_DIR, REGISTRY_PATH,
 CONFIG_PATH, load_config, the ledger connection) as `settings.NAME`, never
@@ -21,39 +21,19 @@ import evidence
 
 
 # ---------------------------------------------------------------------------
-# Paths: central install with fallback to per-project .workflow/
+# Paths: the central install
 # ---------------------------------------------------------------------------
 
-_CENTRAL_HOME = Path(os.environ.get("RELAY_HOME", Path.home() / "Projects" / ".relay"))
-
-# Detect if we're running from a per-project .workflow/ install (legacy fallback)
-_SCRIPT_DIR = Path(__file__).resolve().parent
-_LEGACY_WORKFLOW_DIR = _SCRIPT_DIR.parent
-_IS_LEGACY = (_LEGACY_WORKFLOW_DIR / "handoffs").exists() and not _CENTRAL_HOME.exists()
-
-if _IS_LEGACY:
-    # Legacy per-project mode: resolve paths relative to .workflow/
-    RELAY_HOME = _LEGACY_WORKFLOW_DIR
-    TASKS_DIR = _LEGACY_WORKFLOW_DIR / "handoffs"
-    AGENTS_DIR = _LEGACY_WORKFLOW_DIR.parent / ".claude" / "agents"
-    CONFIG_PATH = _SCRIPT_DIR / "config.yaml"
-    REGISTRY_PATH = None  # no registry in legacy mode
-    # Mode-aware user-facing strings
-    _CLI_CMD = ".workflow/flow"           # how user invokes commands
-    _PIP_HINT = "pip install -r .workflow/orchestrator/requirements.txt"
-else:
-    # Central mode: resolve paths from /Projects/.relay/
-    RELAY_HOME = _CENTRAL_HOME
-    TASKS_DIR = RELAY_HOME / "tasks"
-    AGENTS_DIR = RELAY_HOME / "agents"
-    CONFIG_PATH = RELAY_HOME / "orchestrator" / "config.yaml"
-    REGISTRY_PATH = RELAY_HOME / "registry.yaml"
-    # Mode-aware user-facing strings
-    _CLI_CMD = "relay"
-    _PIP_HINT = f"pip install -r {RELAY_HOME}/orchestrator/requirements.txt"
+RELAY_HOME = Path(os.environ.get("RELAY_HOME", Path.home() / "Projects" / ".relay"))
+TASKS_DIR = RELAY_HOME / "tasks"
+AGENTS_DIR = RELAY_HOME / "agents"
+CONFIG_PATH = RELAY_HOME / "orchestrator" / "config.yaml"
+REGISTRY_PATH = RELAY_HOME / "registry.yaml"
+_CLI_CMD = "relay"  # how the owner runs a command
+_PIP_HINT = f"pip install -r {RELAY_HOME}/orchestrator/requirements.txt"
 
 # ---------------------------------------------------------------------------
-# YAML (requires PyYAML)
+# YAML: requires PyYAML
 # ---------------------------------------------------------------------------
 # The orchestrator state (run.yaml) uses nested lists-of-dicts which cannot
 # be correctly round-tripped by a naive parser. Rather than ship a broken
@@ -83,18 +63,30 @@ def dump_yaml(data: dict) -> str:
 # Config
 # ---------------------------------------------------------------------------
 
+DEFAULT_AGENT_TIMEOUT_SECONDS = 2 * 60 * 60
+
 DEFAULT_CONFIG = {
     # Automatic rounds in a row into one phase before Relay stops and asks.
     # A send-back or an override into the phase starts its count again.
     "max_retries": 3,
     "auto_invoke": False,
     "model": None,  # use default
-    "persistence_backend": "files",  # "files" | "sqlite"; config.example.yaml sets sqlite
+    "effort": None,  # use Claude's own default
+    # How long a role started under --auto may run before Relay stops it.
+    "agent_timeout_seconds": DEFAULT_AGENT_TIMEOUT_SECONDS,
+    # Per-role model, effort, timeout_seconds and permission_mode (agents.launch_settings).
+    "roles": {},
+    # "files" | "sqlite". config.example.yaml sets sqlite for a new install. The
+    # default stays files so an older config.yaml without the key, which
+    # setup.sh never replaces, keeps the backend its tasks are on.
+    "persistence_backend": "files",
     "test_timeout_seconds": evidence.DEFAULT_TIMEOUT_SECONDS,  # Relay's own test runs
     "keep_awake_seconds": awake.DEFAULT_SECONDS,  # hold the Mac awake per phase; 0 = never
     "human_gates": {
         "after_designer": True,
         "after_architect": True,
+        "reviewer_approved_with_warnings": True,
+        "tester_pass_with_concerns": True,
     },
 }
 
@@ -119,11 +111,13 @@ def load_config() -> dict:
 # SQLite backend wiring
 # ---------------------------------------------------------------------------
 # Inert unless config["persistence_backend"] == "sqlite" (the default is
-# "files"). When active, exactly four functions in
-# run_state.py dispatch to db.py instead of the filesystem: load_run_state,
-# save_run_state, find_latest_artifact, get_next_step. Everything else in
-# Relay (routing, retries, worktrees, CLI commands) is unchanged and
-# unaware of which backend is in use -- it just calls these four functions.
+# "files"). When active, run_state.py's functions dispatch
+# to db.py instead of the filesystem: load_run_state, save_run_state,
+# find_latest_artifact and get_next_step, and the calls that record what
+# happens (create_run, dispatch_step, record_verdict, count_retry) inside
+# ledger_writes(). Routing, retries and the CLI commands call these and are
+# unaware of which backend is in use; the commands also write events
+# straight to db.py, which the files backend does not keep.
 
 _db_connection: sqlite3.Connection | None = None
 
@@ -175,11 +169,16 @@ def close_ledger():
 # ---------------------------------------------------------------------------
 
 # Pipeline order for new tasks. "pentest" is legacy: it stays a valid phase
-# so tasks recorded before Security absorbed it still load and route, but
-# nothing routes into it any more.
+# and keeps its verdicts so tasks recorded before Security absorbed it still
+# load and read, but it has no routes (routing.ROUTING) and nothing routes
+# into it.
 PIPELINE_ORDER = ["designer", "architect", "builder", "reviewer", "tester", "security", "ops"]
 LEGACY_PHASES = ["pentest"]
-VALID_PHASES = PIPELINE_ORDER + LEGACY_PHASES
+# The Arbiter (arbiter.py) is a step Relay calls, never a place in the
+# pipeline: it is not in PIPELINE_ORDER, so no override, --to or card offers
+# to move a task into it.
+ARBITER = "arbiter"
+VALID_PHASES = PIPELINE_ORDER + [ARBITER] + LEGACY_PHASES
 FIRST_PHASE = "designer"
 
 OPS_PREPARE_VERDICTS = ["deploy-ready", "not-ready", "needs-manual-steps"]
@@ -194,6 +193,7 @@ VALID_VERDICTS = {
     "security": ["secure", "findings", "critical-findings"],
     "ops": OPS_PREPARE_VERDICTS + OPS_EXECUTE_VERDICTS,
     "pentest": ["secure", "findings", "vulnerable"],
+    ARBITER: ["move-on", "targeted-round", "re-plan", "escalate"],
 }
 
 VALID_STATUSES = ["in_progress", "completed", "blocked", "abandoned"]
@@ -215,8 +215,8 @@ def _resolve_repo_path(alias: str) -> Path | None:
 def _task_cwd(state: dict) -> str | None:
     """Working directory for a task's phases: the checkout `relay start`
     recorded. Falls back to the registered repo path (a task with no
-    worktree_path), then to the legacy .workflow parent. None when nothing
-    resolves (the agent inherits relay's cwd)."""
+    worktree_path). None when nothing resolves (the agent inherits relay's
+    cwd)."""
     worktree = state.get("worktree_path")
     if worktree:
         return worktree
@@ -225,6 +225,4 @@ def _task_cwd(state: dict) -> str | None:
         repo_path = _resolve_repo_path(repo)
         if repo_path:
             return str(repo_path)
-    if _IS_LEGACY:
-        return str(_LEGACY_WORKFLOW_DIR.parent)
     return None

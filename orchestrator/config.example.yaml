@@ -1,9 +1,12 @@
-# Relay configuration. setup.sh copies this to $RELAY_HOME/orchestrator/config.yaml
-# once; edit that copy.
+# Relay's own configuration. ./setup.sh copies this file to
+# orchestrator/config.yaml in the install when none is there, and never
+# overwrites it after. A repo's profile cannot set anything here.
 
-# Where Relay keeps state. sqlite is the ledger: every step, verdict, test run
-# and owner decision, append-only. "files" is the older run.yaml mode, kept only
-# for installs that predate the ledger.
+# Where Relay keeps its record of every task. sqlite is the ledger, relay.db
+# in the install folder: it records every event, approval, note, test run and
+# sizing change. Run `relay recover --init` once to create it before the first
+# task. Unset or "files" means the legacy files backend (run.yaml in each task
+# folder, with no events and no test runs recorded).
 persistence_backend: sqlite
 
 # How many times in a row Relay may route a task back to one phase on its own
@@ -25,15 +28,43 @@ keep_awake_seconds: 7200
 # If false (default), it prints the command for you to run manually.
 auto_invoke: false
 
-# Model override for agent invocation (null = use default).
-# Only applies when auto_invoke is true.
+# How each role runs when Relay starts it itself (`--auto`). None of this
+# applies in manual mode, where the role runs in a session you paste it
+# into, with that session's own settings. A repo's .relay/profile.yaml
+# cannot set any of it, so a task's branch cannot change how its roles run.
+
+# Model for every role (null = Claude's own default).
 model: null
 
-# The two gates you can turn off. Set one to false and Relay moves on
-# without stopping there. Every other gate (a pass with warnings or concerns,
-# Security's findings, a deploy, a role that asks for you) always stops.
+# Effort for every role: low, medium, high, xhigh or max (null = Claude's
+# own default).
+# effort: high
+
+# How long a role may run before Relay stops it, with every process it
+# started, and stops the task for you (seconds). Counts time the Mac is awake.
+agent_timeout_seconds: 7200
+
+# Per-role settings. Each is optional; an unset one falls back to the global
+# value above, and then to the default. Every role's permission mode
+# defaults to bypassPermissions, written on the call, because a permission
+# prompt under `claude --print` cannot be answered. A mode must be one
+# Claude Code accepts: acceptEdits, auto, bypassPermissions, manual,
+# dontAsk or plan. A value Relay cannot use is warned about at launch and
+# the next one down (the global value, then the default) is used instead.
+# roles:
+#   builder:
+#     model: opus
+#     effort: max
+#     timeout_seconds: 10800
+#     permission_mode: bypassPermissions
+
+# Human approval gates. Set one to false to go on without stopping there.
+# after_designer (approve the brief) is on unless set to false here.
+# Warning verdicts (approved_with_warnings, pass_with_concerns, findings)
+# go to the Arbiter, not to a gate; the last two keys below are accepted
+# and not read.
 human_gates:
-  # Approve the Designer's brief before the next role starts
-  after_designer: true
-  # Approve the Architect's plan before building
+  # Approve the architect's plan before building
   after_architect: true
+  reviewer_approved_with_warnings: true
+  tester_pass_with_concerns: true

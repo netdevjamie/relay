@@ -25,7 +25,7 @@ Your most valuable answer is sometimes "this shouldn't be built." Killing a weak
 2. The project overview (`context/PROJECT.md`) and decision log (`context/DECISIONS.md`) if the repo has them. Treat decisions as settled.
 3. The parts of the existing app the request touches: screens, flows, behavior. Look at what is actually there; don't assume.
 4. The project profile (`.relay/profile.yaml`) for platforms and stores, if present.
-5. The repo's threat model (`.relay/threat-model.md`) as it is on the task's base branch, which governs (`git show {base}:.relay/threat-model.md`, the base your task prompt names). When there is none, Relay's roles work to the strictest default, which the Builder, Reviewer, Tester and Security files define.
+5. The repo's threat model (`.relay/threat-model.md`) as it is at the task's base commit, which governs (`git show <commit>:.relay/threat-model.md`, the base commit your task prompt names). When there is none, Relay's roles work to the strictest default, which the Builder, Reviewer, Tester and Security files define.
 
 ## The brief
 

@@ -14,6 +14,7 @@ import awake
 import commands
 import read_api
 import settings
+from tests.cli_edge import run_relay
 from tests.test_send_back import UP_TO_REVIEW, config, finish_step, task_at  # noqa: F401  (config is a fixture)
 
 # Taken when this file is loaded, before the shared guard in conftest.py
@@ -142,7 +143,7 @@ class TestRelayHoldsAndReleases:
         assert no_real_keep_awake == [(settings.TASKS_DIR / "hold", awake.DEFAULT_SECONDS)]
         config["keep_awake_seconds"] = 300
         finish_step("hold", config, "ready-for-architect")
-        commands.cmd_next("hold", auto=False, config=config)
+        assert commands.cmd_next("hold", auto=False, config=config) == 0
         assert no_real_keep_awake[-1] == (settings.TASKS_DIR / "hold", 300)
 
     def test_next_releases_once_the_phase_has_a_verdict_and_not_before(self, config, monkeypatch):
@@ -150,19 +151,19 @@ class TestRelayHoldsAndReleases:
         monkeypatch.setattr(awake, "release", released.append)
         task_at("let-go", config, [])
         with pytest.raises(SystemExit):
-            commands.cmd_next("let-go", auto=False, config=config)  # the agent is still working
+            run_relay(config, "next", "let-go")  # the agent is still working
         assert released == []
         finish_step("let-go", config, "ready-for-architect")
-        commands.cmd_next("let-go", auto=False, config=config)
+        assert commands.cmd_next("let-go", auto=False, config=config) == 0
         assert released == [settings.TASKS_DIR / "let-go"]
 
     def test_abort_and_closing_a_task_release(self, config, monkeypatch):
         released = []
         monkeypatch.setattr(awake, "release", released.append)
         task_at("stop", config, [])
-        commands.cmd_abort("stop", config)
+        assert commands.cmd_abort("stop", config) == 0
         task_at("close", config, [])
-        commands.cmd_override("close", "done", config)
+        assert commands.cmd_override("close", "done", config) == 0
         assert released == [settings.TASKS_DIR / "stop", settings.TASKS_DIR / "close"]
 
 
@@ -184,11 +185,11 @@ class TestSleepIsNoticed:
         asked = self.slept_once(monkeypatch)
         finish_step("nap", config, "ready-for-architect")
         capsys.readouterr()
-        commands.cmd_next("nap", auto=False, config=config)
+        assert commands.cmd_next("nap", auto=False, config=config) == 0
         out = capsys.readouterr().out
         assert ("went to sleep once, for 60 minutes in all, between designer (step 1) being "
                 "dispatched and its artifact being written") in out
-        commands.cmd_next("nap", auto=False, config=config)  # at the gate again: same step
+        assert commands.cmd_next("nap", auto=False, config=config) == 0  # at the gate again: same step
 
         noted = read_api.status_payload("nap", config)["interruptions"]
         assert noted == [{"phase": "designer", "step": 1, "noticed": noted[0]["noticed"],
@@ -207,7 +208,7 @@ class TestSleepIsNoticed:
         task_at("nap-shown", config, [])
         self.slept_once(monkeypatch, seconds=7200)
         finish_step("nap-shown", config, "ready-for-architect")
-        commands.cmd_next("nap-shown", auto=False, config=config)
+        assert commands.cmd_next("nap-shown", auto=False, config=config) == 0
         capsys.readouterr()
         commands.cmd_status("nap-shown", config)
         out = capsys.readouterr().out

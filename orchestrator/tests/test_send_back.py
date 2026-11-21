@@ -1,9 +1,10 @@
 """Tests for `relay send-back`: the owner returns work for fixes at a gate.
 
-Sending work back is the recommended answer to a warnings verdict. It is not
-an approval: the ledger records it as its own event. It is the owner's
-decision, so it is not counted toward the retry limit (see
-test_automatic_rounds.py).
+A warnings verdict goes to the Arbiter, and the owner sends work back where
+it asks the owner (an escalation), or at a
+warnings gate left standing from before. A send-back is not an approval:
+the ledger records it as its own event. It is the owner's decision, so it
+is not counted toward the retry limit (see test_automatic_rounds.py).
 """
 
 import json
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import db
 import relay
+from tests.cli_edge import run_relay
 import settings
 import run_state
 import agents
@@ -24,12 +26,14 @@ import read_api
 import commands
 import gate_card
 from settings import DEFAULT_CONFIG, VALID_PHASES, VALID_STATUSES, VALID_VERDICTS
+from tests.arbiter_fixtures import finish_arbiter, stand_at_the_gate
 
 
 @pytest.fixture
 def config(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(settings, "_db_connection", None)
+    monkeypatch.setattr(settings, "REGISTRY_PATH", tmp_path / "registry.yaml")
     db_path = tmp_path / "relay.db"
     monkeypatch.setenv("RELAY_DB_PATH", str(db_path))
     (tmp_path / "tasks").mkdir()
@@ -56,14 +60,24 @@ def task_at(task_id: str, config: dict, verdicts: list[tuple[str, str]]) -> None
     task_dir = settings.TASKS_DIR / task_id
     task_dir.mkdir(parents=True)
     (task_dir / "brief.md").write_text("# Brief\n")
-    commands.cmd_start(task_id, auto=False, config=config)
+    assert commands.cmd_start(task_id, auto=False, config=config) == 0
     for verdict, extra_frontmatter in verdicts:
         finish_step(task_id, config, verdict, extra_frontmatter)
-        commands.cmd_next(task_id, auto=False, config=config)
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
 
 
 UP_TO_REVIEW = [("ready-for-architect", ""), ("ready-for-builder", "deploy: no\n"),
                 ("ready-for-review", "")]
+
+
+def the_arbiter_escalates(task_id: str, config: dict, *, recorded: bool = True) -> None:
+    """The Reviewer passes with warnings, the Arbiter is called and its
+    report escalates; with `recorded`, `relay next` has read it too."""
+    finish_step(task_id, config, "approved_with_warnings")
+    assert commands.cmd_next(task_id, auto=False, config=config) == 0
+    finish_arbiter(task_id, config, "escalate")
+    if recorded:
+        assert commands.cmd_next(task_id, auto=False, config=config) == 0
 
 
 def events_of_type(task_id: str, event_type: str) -> list[dict]:
@@ -82,11 +96,15 @@ def before_the_stop_card(out: str, task_id: str, config: dict) -> str:
 
 
 class TestWarningsVerdictAtTheGate:
+    """A warnings gate left standing from before the Arbiter reads as it
+    did: these walks stand at it, as the old `relay next` left it."""
+
     def test_next_recommends_sending_back_before_accepting(self, config, capsys):
         task_at("warn", config, UP_TO_REVIEW)
         finish_step("warn", config, "approved_with_warnings")
+        stand_at_the_gate("warn", config)
         capsys.readouterr()
-        commands.cmd_next("warn", auto=False, config=config)
+        assert commands.cmd_next("warn", auto=False, config=config) == 0
         out = capsys.readouterr().out
         send_back = f"{settings._CLI_CMD} send-back warn"
         accept = f"{settings._CLI_CMD} override warn tester"
@@ -97,6 +115,7 @@ class TestWarningsVerdictAtTheGate:
     def test_gate_json_recommends_send_back(self, config):
         task_at("warn-json", config, UP_TO_REVIEW)
         finish_step("warn-json", config, "approved_with_warnings")
+        stand_at_the_gate("warn-json", config)
         gate = read_api.gate_check_payload("warn-json", config)["gate"]
         assert gate["kind"] == "approval"
         assert gate["send_back_command"] == f"{settings._CLI_CMD} send-back warn-json"
@@ -115,6 +134,7 @@ class TestWarningsVerdictAtTheGate:
                           for v, extra in phase_verdicts]
         task_at("warn-other", config, phase_verdicts)
         finish_step("warn-other", config, verdict)
+        stand_at_the_gate("warn-other", config)
         gate = read_api.gate_check_payload("warn-other", config)["gate"]
         assert (gate["state"], gate["next_phase"], gate["send_back_recommended"]) == (
             "waiting_on_owner", next_phase, True)
@@ -122,8 +142,8 @@ class TestWarningsVerdictAtTheGate:
     def test_security_findings_on_a_non_deploy_task_can_be_sent_back(self, config):
         task_at("no-deploy-back", config, UP_TO_REVIEW + [("approved", ""), ("pass", "")])
         finish_step("no-deploy-back", config, "findings")
-        commands.cmd_next("no-deploy-back", auto=False, config=config)
-        commands.cmd_send_back("no-deploy-back", config, note="fix finding 2")
+        stand_at_the_gate("no-deploy-back", config)
+        assert commands.cmd_send_back("no-deploy-back", config, note="fix finding 2") == 0
         status = read_api.status_payload("no-deploy-back", config)
         assert (status["task"]["status"], status["task"]["current_phase"]) == ("in_progress", "builder")
         assert events_of_type("no-deploy-back", db.EVENT_APPROVAL) == []
@@ -131,18 +151,20 @@ class TestWarningsVerdictAtTheGate:
     def test_auto_mode_stops_at_the_findings_gate_on_a_non_deploy_task(self, config, monkeypatch):
         task_at("no-deploy-auto", config, UP_TO_REVIEW + [("approved", ""), ("pass", "")])
         finish_step("no-deploy-auto", config, "findings")
+        stand_at_the_gate("no-deploy-auto", config)
         started = []
         monkeypatch.setattr(agents, "invoke_agent",
                             lambda *args, **kwargs: started.append(args))
-        commands.cmd_next("no-deploy-auto", auto=True, config=config)
+        assert commands.cmd_next("no-deploy-auto", auto=True, config=config) == 0
         assert started == []
         assert read_api.status_payload("no-deploy-auto", config)["task"]["status"] == "in_progress"
 
     def test_security_findings_gate_even_when_the_task_does_not_deploy(self, config, capsys):
         task_at("no-deploy", config, UP_TO_REVIEW + [("approved", ""), ("pass", "")])
         finish_step("no-deploy", config, "findings")
+        stand_at_the_gate("no-deploy", config)
         capsys.readouterr()
-        commands.cmd_next("no-deploy", auto=False, config=config)
+        assert commands.cmd_next("no-deploy", auto=False, config=config) == 0
         out = capsys.readouterr().out
 
         # Nobody has decided about the findings yet, so the task stays open.
@@ -160,7 +182,7 @@ class TestWarningsVerdictAtTheGate:
         assert gate["send_back_recommended"] is True
 
         # Accepting the findings is the owner's recorded decision, and closes the task.
-        commands.cmd_override("no-deploy", "done", config)
+        assert commands.cmd_override("no-deploy", "done", config) == 0
         assert read_api.status_payload("no-deploy", config)["task"]["status"] == "completed"
         assert events_of_type("no-deploy", db.EVENT_APPROVAL)[-1]["payload"]["next_phase"] == "done"
 
@@ -169,7 +191,7 @@ class TestWarningsVerdictAtTheGate:
         task_at("brief", config, [])
         finish_step("brief", config, "ready-for-architect")
         capsys.readouterr()
-        commands.cmd_next("brief", auto=False, config=config)
+        assert commands.cmd_next("brief", auto=False, config=config) == 0
         out = capsys.readouterr().out
         assert "To ask the designer for changes:" in out
         assert "(recommended)" not in out
@@ -186,50 +208,48 @@ class TestWarningsVerdictAtTheGate:
 class TestSendBack:
     def test_review_warnings_go_back_to_the_builder_as_a_fix_pass(self, config, capsys):
         task_at("fix", config, UP_TO_REVIEW)
-        finish_step("fix", config, "approved_with_warnings")
-        commands.cmd_next("fix", auto=False, config=config)
+        the_arbiter_escalates("fix", config)
         capsys.readouterr()
 
-        commands.cmd_send_back("fix", config)
+        assert commands.cmd_send_back("fix", config) == 0
         out = capsys.readouterr().out
         state = run_state.load_run_state("fix", config)
         latest = read_api.status_payload("fix", config)["latest_step"]
         assert "Sent back to builder" in out
         assert (state["status"], state["current_phase"]) == ("in_progress", "builder")
-        assert (latest["phase"], latest["artifact"]) == ("builder", "05-builder-fix-1.md")
+        assert (latest["phase"], latest["artifact"]) == ("builder", "06-builder-fix-1.md")
         assert state["retries"]["builder"] == 0
 
     def test_it_is_recorded_as_sent_back_and_never_as_an_approval(self, config):
         task_at("ledger", config, UP_TO_REVIEW)
-        finish_step("ledger", config, "approved_with_warnings")
-        commands.cmd_next("ledger", auto=False, config=config)
-        commands.cmd_send_back("ledger", config, note="Fix the two warnings about error handling.")
+        the_arbiter_escalates("ledger", config)
+        assert commands.cmd_send_back("ledger", config, note="Fix the two warnings about error handling.") == 0
 
         sent_back = events_of_type("ledger", db.EVENT_SENT_BACK)
         assert len(sent_back) == 1
-        assert sent_back[0]["phase"] == "reviewer"
-        assert sent_back[0]["verdict"] == "approved_with_warnings"
+        assert sent_back[0]["phase"] == "arbiter"   # sent back from the Arbiter's escalation
+        assert sent_back[0]["verdict"] == "escalate"
         assert sent_back[0]["payload"] == {"to_phase": "builder",
                                            "note": "Fix the two warnings about error handling."}
         assert events_of_type("ledger", db.EVENT_APPROVAL) == []
 
     def test_the_owners_note_reaches_the_next_agent(self, config, capsys):
         task_at("note", config, UP_TO_REVIEW)
-        finish_step("note", config, "approved_with_warnings")
-        commands.cmd_next("note", auto=False, config=config)
+        the_arbiter_escalates("note", config)
         capsys.readouterr()
-        commands.cmd_send_back("note", config, note="Keep the public API unchanged.")
+        assert commands.cmd_send_back("note", config, note="Keep the public API unchanged.") == 0
         out = capsys.readouterr().out
         assert "The owner sent this back with a note:\nKeep the public API unchanged." in out
         assert out.count("Keep the public API unchanged.") == 1
         assert "04-reviewer.md" in out  # the agent is pointed at what it must answer
+        assert "05-arbiter.md" in out    # and at the ruling it was sent back from
 
     def test_a_brief_goes_back_to_the_designer(self, config):
         config["human_gates"]["after_designer"] = True
         task_at("revise", config, [])
         finish_step("revise", config, "ready-for-architect")
-        commands.cmd_next("revise", auto=False, config=config)
-        commands.cmd_send_back("revise", config, note="No PIN.")
+        assert commands.cmd_next("revise", auto=False, config=config) == 0
+        assert commands.cmd_send_back("revise", config, note="No PIN.") == 0
         state = run_state.load_run_state("revise", config)
         assert state["current_phase"] == "designer"
         assert state["retries"].get("designer", 0) == 0
@@ -237,19 +257,18 @@ class TestSendBack:
 
     def test_send_back_works_before_next_has_recorded_the_verdict(self, config):
         task_at("unrecorded", config, UP_TO_REVIEW)
-        finish_step("unrecorded", config, "approved_with_warnings")  # `relay next` not run
-        commands.cmd_send_back("unrecorded", config)
+        the_arbiter_escalates("unrecorded", config, recorded=False)  # `relay next` not run
+        assert commands.cmd_send_back("unrecorded", config) == 0
         history = run_state.load_run_state("unrecorded", config)["history"]
         assert [(entry["phase"], entry.get("verdict")) for entry in history[-2:]] == [
-            ("reviewer", "approved_with_warnings"), ("builder", None)]
+            ("arbiter", "escalate"), ("builder", None)]
 
     def test_after_the_fix_the_work_is_reviewed_again(self, config):
         task_at("again", config, UP_TO_REVIEW)
-        finish_step("again", config, "approved_with_warnings")
-        commands.cmd_next("again", auto=False, config=config)
-        commands.cmd_send_back("again", config)
+        the_arbiter_escalates("again", config)
+        assert commands.cmd_send_back("again", config) == 0
         finish_step("again", config, "ready-for-review")
-        commands.cmd_next("again", auto=False, config=config)
+        assert commands.cmd_next("again", auto=False, config=config) == 0
         assert run_state.load_run_state("again", config)["current_phase"] == "reviewer"
 
 
@@ -259,7 +278,7 @@ class TestSendBack:
         gate = read_api.gate_check_payload("ask", config)["gate"]
         assert (gate["kind"], gate["send_back_command"], gate["send_back_recommended"]) == (
             "owner_decision", f"{settings._CLI_CMD} send-back ask", False)
-        commands.cmd_send_back("ask", config, note="Use the cheaper provider.")
+        assert commands.cmd_send_back("ask", config, note="Use the cheaper provider.") == 0
         assert run_state.load_run_state("ask", config)["current_phase"] == "architect"
         assert events_of_type("ask", db.EVENT_SENT_BACK)[0]["payload"]["note"] == "Use the cheaper provider."
 
@@ -268,7 +287,7 @@ class TestSendBackRefusals:
     def refused(self, task_id, config, capsys):
         capsys.readouterr()
         with pytest.raises(SystemExit) as exit_info:
-            commands.cmd_send_back(task_id, config)
+            run_relay(config, "send-back", task_id)
         return exit_info.value.code, capsys.readouterr().out
 
     def test_nothing_to_send_back_while_the_agent_is_still_working(self, config, capsys):
@@ -284,7 +303,7 @@ class TestSendBackRefusals:
         assert (code, "No run state for no-such-task." in out) == (1, True)
 
         task_at("done", config, [])
-        commands.cmd_override("done", "done", config)
+        assert commands.cmd_override("done", "done", config) == 0
         code, out = self.refused("done", config, capsys)
         assert (code, "already completed" in out) == (1, True)
 
@@ -301,8 +320,8 @@ class TestSendBackRefusals:
         the Reviewer's verdict is no longer the owner's to send back."""
         task_at("moved-on", config, UP_TO_REVIEW)
         finish_step("moved-on", config, "approved_with_warnings")
-        commands.cmd_next("moved-on", auto=False, config=config)
-        commands.cmd_override("moved-on", "tester", config)
+        assert commands.cmd_next("moved-on", auto=False, config=config) == 0
+        assert commands.cmd_override("moved-on", "tester", config) == 0
         before = (run_state.load_run_state("moved-on", config), db.get_events(settings.get_db_connection(), "moved-on"))
         code, out = self.refused("moved-on", config, capsys)
         assert (code, "Nothing to send back: tester has not finished" in out) == (1, True)
@@ -325,8 +344,8 @@ class TestSendBackRefusals:
 
     def test_running_it_twice_records_one_step_and_one_event(self, config, capsys):
         task_at("twice", config, UP_TO_REVIEW)
-        finish_step("twice", config, "approved_with_warnings")
-        commands.cmd_send_back("twice", config)
+        the_arbiter_escalates("twice", config, recorded=False)
+        assert commands.cmd_send_back("twice", config) == 0
         code, _ = self.refused("twice", config, capsys)
         assert code == 1
         steps = [entry["phase"] for entry in run_state.load_run_state("twice", config)["history"]]
@@ -337,16 +356,34 @@ class TestSendBackRefusals:
 class TestCommandLine:
     def test_send_back_with_a_note_from_the_command_line(self, config, monkeypatch, capsys):
         task_at("cli", config, UP_TO_REVIEW)
-        finish_step("cli", config, "approved_with_warnings")
+        the_arbiter_escalates("cli", config, recorded=False)
         monkeypatch.setattr(settings, "load_config", lambda: config)
         monkeypatch.setattr(sys, "argv", ["relay", "send-back", "cli", "--note", "Tidy the names."])
         relay.main()
         assert run_state.load_run_state("cli", config)["current_phase"] == "builder"
         assert events_of_type("cli", db.EVENT_SENT_BACK)[0]["payload"]["note"] == "Tidy the names."
 
+    @pytest.mark.parametrize("close", ["override", "abort"])
+    def test_next_on_a_closed_task_says_so_and_exits_0(self, config, capsys, close):
+        """`relay next` on a finished or aborted task is not a refusal: it
+        says so, changes nothing and the command line exits 0, as before
+        next returned its code instead of exiting."""
+        task_at("shut", config, [])
+        if close == "override":
+            assert commands.cmd_override("shut", "done", config) == 0
+        else:
+            assert commands.cmd_abort("shut", config) == 0
+        before = run_state.load_run_state("shut", config)
+        capsys.readouterr()
+        run_relay(config, "next", "shut")   # a non-zero exit raises SystemExit here
+        status = "completed" if close == "override" else "abandoned"
+        assert f"Task shut is already {status}." in capsys.readouterr().out
+        assert run_state.load_run_state("shut", config) == before
+
     def test_gate_check_text_shows_the_send_back_command(self, config, capsys):
         task_at("text", config, UP_TO_REVIEW)
         finish_step("text", config, "approved_with_warnings")
+        stand_at_the_gate("text", config)
         capsys.readouterr()
         commands.cmd_gate_check("text", config)
         out = capsys.readouterr().out

@@ -4,15 +4,14 @@ the tests of every place Relay reads YAML it did not write."""
 import pytest
 import yaml
 
-# A 535-byte merge-key bomb: eight levels, each merging ten copies of the
-# one before. YAML's own loader takes tens of seconds and gigabytes of
-# memory to build it.
+# Finding 1's 535 bytes: eight levels, each merging ten copies of the one
+# before. YAML's own loader took 42 s and 1.7 GB to build it.
 SECURITYS_MERGE_KEYS = "m0: &m0 {k: 1}\n" + "".join(
     f"m{level}: &m{level}\n  <<: [" + ", ".join([f"*m{level - 1}"] * 10) + "]\n"
     for level in range(1, 9))
 
-# Four values YAML's own loader raises ValueError or AttributeError on, not
-# one of its own errors.
+# Finding 2's four lines: YAML's own loader raised ValueError or
+# AttributeError on each, not one of its own errors.
 BAD_VALUES = ["released: 2026-99-99\n", "count: " + "1" * 5_000 + "\n",
               "ratio: !!float 'abc'\n", "when: !!timestamp 'x'\n"]
 BAD_VALUE_NAMES = ["a date that does not exist", "an integer of 5,000 digits",

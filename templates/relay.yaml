@@ -1,6 +1,10 @@
-# Optional per-repo Relay settings. Relay never writes this file: put it in
-# the repo root as .relay.yaml and commit it if you want what it offers.
+# Per-repo Relay settings, kept in the repo root as .relay.yaml.
+# `relay register` writes a one-line copy holding the alias if none exists.
 
-# A file in the repo root with more deploy context. The Ops role is given
-# its text along with its own instructions.
+alias: my-project
+
+# Optional: a file in the repo root with more deploy context. The Ops role
+# is given its text along with its own instructions. Relay reads it, and this
+# line, as committed on the task's base branch: an uncommitted copy, or one
+# on the task's own branch, is not used.
 # ops_addendum: deploy.md
