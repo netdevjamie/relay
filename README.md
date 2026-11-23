@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/relay-lockup-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/brand/relay-lockup-light.svg">
+    <img alt="Relay" src="docs/brand/relay-lockup-light.svg" height="64">
+  </picture>
+</p>
+
 # Relay
 
 [![tests](https://github.com/netdevjamie/relay/actions/workflows/test.yml/badge.svg)](https://github.com/netdevjamie/relay/actions/workflows/test.yml)
