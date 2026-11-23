@@ -497,7 +497,11 @@ def move_submodule(repo: Path, where: str) -> str:
     inside = repo / where
     (inside / "conftest.py").write_text("# now it forces every test to pass\n")
     commit_all(inside, "change the helper")
-    return commit_all(repo, "move the submodule")
+    # Stage the new gitlink by hand: since git 2.56, `git add -A` skips a submodule
+    # whose .gitmodules entry says `ignore = all`, so commit_all would find nothing to commit.
+    git(repo, "update-index", "--cacheinfo", f"160000,{git(inside, 'rev-parse', 'HEAD')},{where}")
+    git(repo, "commit", "-q", "-m", "move the submodule")
+    return git(repo, "rev-parse", "HEAD")
 
 
 class TestTheDocumentsMatchTheCode:
